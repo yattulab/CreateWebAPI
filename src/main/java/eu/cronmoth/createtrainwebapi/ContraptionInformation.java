@@ -121,6 +121,13 @@ public final class ContraptionInformation {
                     continue;
                 }
 
+                // Physics Assembler vehicles keep internal Create entities in Sable's
+                // remote plotyard. The vehicle itself is exported through /vehicles.
+                if (SableVehicleInformation.isInsideLoadedVehiclePlot(level, entity.position())) {
+                    knownContraptions.remove(entity.getUUID());
+                    continue;
+                }
+
                 Contraption contraption = entity.getContraption();
                 if (contraption == null || contraption.getBlocks().isEmpty()) {
                     continue;
