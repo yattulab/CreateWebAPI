@@ -78,10 +78,20 @@
                     }
                 }
 
-                // train-labels.js creates this registry when installed. Register the
-                // core sets there too so subsequent marker refreshes preserve all three.
+                const contraptionOverlay = window.CreateContraptionOverlay;
+                if (contraptionOverlay?.toggle) {
+                    const existingContraptions = root.markerSets?.get("create-contraptions");
+                    if (existingContraptions !== contraptionOverlay.toggle) {
+                        if (existingContraptions) root.remove(existingContraptions);
+                        root.add(contraptionOverlay.toggle);
+                        console.log("[CreateTrainBootstrap] restored Create カラクリ MarkerSet");
+                    }
+                }
+
+                // Register runtime sets so subsequent marker refreshes preserve them.
                 root.__createTrainRuntimeMarkerSets?.add?.("create-rail-network");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-trains");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-contraptions");
             } catch (error) {
                 console.debug("[CreateTrainBootstrap] core MarkerSet guard retry", error);
             }
@@ -129,6 +139,7 @@
 
             // Core renderer first, then optional UI/features that depend on its globals.
             await loadScript("train.js");
+            await loadScript("contraptions.js");
             installCoreMarkerGuard();
             await loadScript("train-settings.js", { optional: true });
 
@@ -138,7 +149,7 @@
             installTrainLabelDistanceLimit();
             await loadScript("train-labels.js", { optional: true });
 
-            console.log("[CreateTrainBootstrap] all Create train scripts loaded");
+            console.log("[CreateTrainBootstrap] all Create overlay scripts loaded");
         } catch (error) {
             console.error("[CreateTrainBootstrap] startup failed", error);
         }
