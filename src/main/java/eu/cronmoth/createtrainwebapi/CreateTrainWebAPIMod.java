@@ -31,6 +31,7 @@ public class CreateTrainWebAPIMod {
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         ContraptionInformation.load(event.getServer());
+        SableVehicleInformation.load(event.getServer());
 
         String host = Config.SERVER_HOST.get();
         int port = Config.SERVER_PORT.get();
@@ -44,6 +45,7 @@ public class CreateTrainWebAPIMod {
         if (++contraptionSnapshotTicks >= 4) {
             contraptionSnapshotTicks = 0;
             ContraptionInformation.update(event.getServer());
+            SableVehicleInformation.update(event.getServer());
         }
 
         // Persist the last-known positions at a low cadence. Chunk unload itself
@@ -51,6 +53,7 @@ public class CreateTrainWebAPIMod {
         if (++contraptionSaveTicks >= 100) {
             contraptionSaveTicks = 0;
             ContraptionInformation.save();
+            SableVehicleInformation.save();
         }
     }
 
@@ -67,6 +70,7 @@ public class CreateTrainWebAPIMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         ContraptionInformation.save();
+        SableVehicleInformation.save();
         apiServer.stop();
     }
 }
