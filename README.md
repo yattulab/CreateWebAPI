@@ -1,61 +1,53 @@
-# CreateTrainWebAPI
+# CreateWebAPI
 
-This mod adds HTTP endpoints for Create train position and railway-network data. It currently targets NeoForge 1.21.1. To install it, place the jar file in the server's `mods` folder.
+CreateWebAPI exposes Create railway and moving-contraption state over HTTP/SSE for web integrations such as BlueMap. This branch targets NeoForge 1.21.1 and keeps the existing CreateTrainWebAPI endpoints compatible.
 
-By default, the web API listens on port `8080`. The host, port, and train-model directory can be changed in the config file.
+## Endpoints
+
+| Path | Purpose |
+| --- | --- |
+| `/network` | Create railway network data |
+| `/trains` | Current train snapshot |
+| `/trainsLive` | Live train SSE stream, 200 ms cadence |
+| `/trainModels/...` | Existing PRBM train models |
+| `/contraptions` | Current non-train Create contraption snapshot |
+| `/contraptionsLive` | Live non-train contraption SSE stream, 200 ms cadence |
+| `/contraptionModels/<modelId>` | Block-model JSON for a live contraption |
+
+Train carriage contraptions are intentionally excluded from `/contraptions*` because they are already handled by the dedicated train endpoints.
+
+Contraption snapshots are captured on the Minecraft server thread every four ticks and then served from immutable cached data, so HTTP workers do not read live game entities directly. Model IDs are SHA-256 hashes of the contraption block layout, allowing identical vehicles to share one model payload.
 
 ## BlueMap integration
 
-When used together with [BluemapCreateEntityAddon](https://github.com/BeneHenke/BluemapCreateEntityAddon), Create train models can be generated for the web overlay.
-
-This fork includes a BlueMap 5.7-compatible integration:
+The BlueMap 5.7 integration consists of:
 
 - `bluemap/train.js` — railway and live 3D train overlay
+- `bluemap/contraptions.js` — live Create contraption overlay
 - `bluemap/train-settings.js` — optional drawing-settings GUI
 - `bluemap/train-labels.js` — optional live train-name markers
-- `bluemap/create-train-bootstrap.js` — recommended deterministic loader for BlueMap 5.7
+- `bluemap/create-train-bootstrap.js` — deterministic script loader for BlueMap 5.7
 
 The built-in **Markers** menu gains:
 
-- `Create 路線図` — railway lines, stations, and inter-dimensional portals
-- `Create 列車` — live Create train positions
-- `Create 列車名` — live train-name markers with current coordinates
+- `Create 路線図`
+- `Create 列車`
+- `Create カラクリ`
+- `Create 列車名` when `train-labels.js` is present
 
-The overlay reads the railway network from `/network`, receives live train updates from `/trainsLive`, and loads generated train models from `/trainModels/`.
+`contraptions.js` renders the block layout of each moving contraption as an instanced voxel model and follows Create's exact rotation basis. This makes cars, aircraft, ships, minecart contraptions, gantries and other non-train `AbstractContraptionEntity` instances visible in BlueMap. Non-full-cube block shapes are currently represented by their one-block voxel footprint.
 
-### Important: BlueMap 5.7 script ordering
+### BlueMap 5.7 script ordering
 
-BlueMap 5.7 stores the `scripts` entries from `webapp.conf` in a Java `HashSet`. Therefore the order written in `webapp.conf` is not guaranteed to be preserved.
+BlueMap 5.7 stores custom script URLs in an unordered collection, so configure BlueMap to load only the bootstrap. The bootstrap loads the integration in this order:
 
-For that reason, the recommended setup is to load only `create-train-bootstrap.js` from BlueMap. The bootstrap then loads the remaining scripts sequentially in this order:
-
-1. `create-train-config.js`
+1. `create-train-config.js` if present
 2. `train.js`
-3. `train-settings.js`
-4. `train-labels.js`
+3. `contraptions.js`
+4. `train-settings.js` if present
+5. `train-labels.js` if present
 
-`create-train-config.js`, `train-settings.js`, and `train-labels.js` are optional to the bootstrap. `train.js` is required.
-
-### Configure the API URL
-
-The BlueMap scripts use `http://localhost:8080` by default. For a remotely hosted BlueMap, copy the included example config and customize it for your environment:
-
-```bash
-cp create-train-config.example.js create-train-config.js
-```
-
-The example contains:
-
-```js
-window.CREATE_TRAIN_WEB_API_URL = "https://train-api.example.com";
-window.CREATE_TRAIN_LABEL_MAX_DISTANCE = 4096;
-window.CREATE_TRAIN_LINES_THROUGH_TERRAIN = true;
-window.CREATE_TRAIN_TRAINS_THROUGH_TERRAIN = false;
-```
-
-`create-train-config.js` is deployment-specific and is ignored by Git. Commit `create-train-config.example.js` instead.
-
-Then configure BlueMap 5.7 to load only the bootstrap:
+Copy the scripts you want from `bluemap/` into the BlueMap web root, then configure `webapp.conf`:
 
 ```hocon
 scripts: [
@@ -63,52 +55,43 @@ scripts: [
 ]
 ```
 
-This avoids relying on BlueMap's unordered custom-script collection.
+For a remotely hosted BlueMap, copy the example configuration:
 
-### Live train-name markers
+```bash
+cp create-train-config.example.js create-train-config.js
+```
 
-`bluemap/train-labels.js` adds `Create 列車名` as an independent MarkerSet. Each visible Create train is represented by a BlueMap `HtmlMarker` that follows the leading carriage position.
+Example:
 
-Opening `Create 列車名` in BlueMap's **Markers** menu shows each train name and its current `(X | Y | Z)` coordinates. Clicking a train entry moves the map to that train. Create component strings such as `literal{Express}` are displayed as `Express`.
+```js
+window.CREATE_TRAIN_WEB_API_URL = "https://create-api.example.com";
+window.CREATE_TRAIN_LABEL_MAX_DISTANCE = 4096;
+window.CREATE_TRAIN_LINES_THROUGH_TERRAIN = true;
+window.CREATE_TRAIN_TRAINS_THROUGH_TERRAIN = false;
+window.CREATE_CONTRAPTIONS_THROUGH_TERRAIN = false;
+```
 
-Train-name labels use BlueMap's normal distance fading. By default they are fully hidden at **4096 blocks**, which keeps the map readable when zoomed far out. Override the limit with `window.CREATE_TRAIN_LABEL_MAX_DISTANCE` in `create-train-config.js`.
+If BlueMap is served over HTTPS, expose the API over HTTPS too to avoid browser mixed-content blocking.
 
-### Drawing-settings GUI
+### Drawing settings
 
-`bluemap/train-settings.js` adds a `Create 描画設定` button to BlueMap's main side menu. Visibility remains controlled by the MarkerSets; this GUI only controls depth rendering:
+`train-settings.js` adds `Create 描画設定` to the BlueMap side menu. It controls whether railway lines, trains and contraptions are rendered through terrain. Visibility itself remains controlled from BlueMap's **Markers** menu.
 
-- `路線図を地形越しに表示`
-- `列車を地形越しに表示`
+## Server installation
 
-Defaults:
+1. Build this branch with Java 21 using `./gradlew build`, or download the successful GitHub Actions build artifact.
+2. Replace the older CreateTrainWebAPI jar in the Minecraft server `mods/` directory with the jar produced by this branch.
+3. Keep Create and its existing dependencies installed.
+4. Start the server once and verify the web API port in the generated config.
+5. Open `http://<server>:8080/contraptions` to verify that moving non-train contraptions are being returned.
+6. Copy the BlueMap scripts described above into the BlueMap web root and hard-refresh the browser.
 
-- railway overlay through terrain: **enabled**
-- trains through terrain: **disabled**
-
-Settings are stored in browser `localStorage`.
-
-### Install the overlay
-
-1. Copy `bluemap/create-train-bootstrap.js`, `bluemap/train.js`, and any optional integration scripts you want to the BlueMap web root.
-2. For a remote API, copy `bluemap/create-train-config.example.js` to `create-train-config.js` in the BlueMap web root and customize the API URL.
-3. Set `webapp.conf` to load only `create-train-bootstrap.js`.
-4. Reload BlueMap and hard-refresh the browser.
-5. Open BlueMap's **Markers** menu to control `Create 路線図`, `Create 列車`, and `Create 列車名`.
-6. If `train-settings.js` is present, use `Create 描画設定` in the main side menu.
-
-The BlueMap page must be able to reach the configured API URL. If BlueMap and the API use different origins, the API must return appropriate CORS headers. HTTPS BlueMap deployments should also expose the API over HTTPS to avoid mixed-content blocking.
-
-## Example server config
+Default server configuration:
 
 ```hocon
-# Webserver Port
-# Default: 8080
-# Range: 1 ~ 65535
 serverPort = 8080
-
-# Webserver hostname
 serverHost = "0.0.0.0"
-
-# Path of the train models
 trainModelPath = "bluemap/train_models/"
 ```
+
+The existing `trainModelPath` remains only for PRBM train models. Contraption models are generated in memory from Create's live block data and are served through `/contraptionModels/<modelId>`.
