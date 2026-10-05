@@ -103,6 +103,8 @@
                 root.__createTrainRuntimeMarkerSets?.add?.("create-trains");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-contraptions");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-vehicles");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-train-labels");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-vehicle-labels");
             } catch (error) {
                 console.debug("[CreateTrainBootstrap] core MarkerSet guard retry", error);
             }
@@ -112,35 +114,51 @@
         setInterval(ensure, 500);
     }
 
-    function installTrainLabelDistanceLimit() {
+    function installLabelDistanceLimits() {
         const HtmlMarker = window.BlueMap?.HtmlMarker;
-        if (!HtmlMarker || HtmlMarker.prototype.__createTrainDistanceLimitPatched) return;
+        if (!HtmlMarker || HtmlMarker.prototype.__createLabelDistanceLimitsPatched) return;
 
-        const configured = Number(window.CREATE_TRAIN_LABEL_MAX_DISTANCE ?? 4096);
-        const maxDistance = Number.isFinite(configured) && configured > 0
-            ? configured
-            : 4096;
+        function positiveDistance(value, fallback) {
+            const number = Number(value);
+            return Number.isFinite(number) && number > 0 ? number : fallback;
+        }
+
+        const trainMaxDistance = positiveDistance(
+            window.CREATE_TRAIN_LABEL_MAX_DISTANCE,
+            4096
+        );
+        const vehicleMaxDistance = positiveDistance(
+            window.CREATE_VEHICLE_LABEL_MAX_DISTANCE,
+            4096
+        );
 
         const originalUpdateFromData = HtmlMarker.prototype.updateFromData;
         HtmlMarker.prototype.updateFromData = function (markerData) {
             if (markerData?.classes?.includes?.("create-train-name-marker")) {
                 markerData = {
                     ...markerData,
-                    maxDistance,
+                    maxDistance: trainMaxDistance,
+                };
+            } else if (markerData?.classes?.includes?.("create-vehicle-name-marker")) {
+                markerData = {
+                    ...markerData,
+                    maxDistance: vehicleMaxDistance,
                 };
             }
 
             return originalUpdateFromData.call(this, markerData);
         };
 
-        Object.defineProperty(HtmlMarker.prototype, "__createTrainDistanceLimitPatched", {
+        Object.defineProperty(HtmlMarker.prototype, "__createLabelDistanceLimitsPatched", {
             configurable: false,
             enumerable: false,
             writable: false,
             value: true,
         });
 
-        console.log(`[CreateTrainBootstrap] train-name max distance: ${maxDistance}`);
+        console.log(
+            `[CreateTrainBootstrap] label max distances: trains=${trainMaxDistance}, vehicles=${vehicleMaxDistance}`
+        );
     }
 
     async function start() {
@@ -155,11 +173,12 @@
             installCoreMarkerGuard();
             await loadScript("train-settings.js", { optional: true });
 
-            // Train-name HtmlMarkers fade out with BlueMap's normal distance logic.
-            // The default is fully hidden at 4096 blocks and can be overridden by
-            // window.CREATE_TRAIN_LABEL_MAX_DISTANCE in create-train-config.js.
-            installTrainLabelDistanceLimit();
+            // Train/vehicle HtmlMarkers fade out with BlueMap's normal distance logic.
+            // Defaults are fully hidden at 4096 blocks and can be overridden in
+            // create-train-config.js.
+            installLabelDistanceLimits();
             await loadScript("train-labels.js", { optional: true });
+            await loadScript("vehicle-labels.js", { optional: true });
 
             console.log("[CreateTrainBootstrap] all Create overlay scripts loaded");
         } catch (error) {
