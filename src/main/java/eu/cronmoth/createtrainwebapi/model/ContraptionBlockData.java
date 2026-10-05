@@ -20,12 +20,13 @@ public class ContraptionBlockData {
     }
 
     public ContraptionBlockData(StructureBlockInfo info) {
-        BlockPos pos = info.pos();
-        BlockState state = info.state();
+        this(info.pos().getX(), info.pos().getY(), info.pos().getZ(), info.state());
+    }
 
-        this.x = pos.getX();
-        this.y = pos.getY();
-        this.z = pos.getZ();
+    public ContraptionBlockData(int x, int y, int z, BlockState state) {
+        this.x = x;
+        this.y = y;
+        this.z = z;
         this.block = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         this.properties = new TreeMap<>();
 
