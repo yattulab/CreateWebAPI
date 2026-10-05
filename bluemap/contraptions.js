@@ -58,11 +58,61 @@
     const toggle = createToggleMarkerSet();
     mapViewer.markers.__createTrainRuntimeMarkerSets?.add?.("create-contraptions");
 
-    function currentWorldKey() {
-        const mapName = mapViewer.map?.data?.name;
-        if (!mapName) return "";
-        const match = /\((?<name>.*)\)/.exec(mapName);
-        return (match?.groups?.name ?? mapName).toLocaleLowerCase();
+    function currentMapIdentities() {
+        const map = mapViewer.map;
+        const data = map?.data ?? {};
+        const values = [
+            data.name,
+            data.world,
+            data.dimension,
+            data.id,
+            data.key,
+            map?.id,
+            map?.key,
+        ]
+            .filter(value => typeof value === "string" && value.length > 0)
+            .map(value => value.toLocaleLowerCase());
+
+        // Keep the old "(dimension)" convention as an additional alias.
+        for (const value of [...values]) {
+            const match = /\((?<name>.*)\)/.exec(value);
+            if (match?.groups?.name) values.push(match.groups.name.toLocaleLowerCase());
+        }
+
+        return [...new Set(values)];
+    }
+
+    function dimensionMatchesCurrentMap(dimension) {
+        const dim = String(dimension ?? "").toLocaleLowerCase();
+        if (!dim) return false;
+
+        const identities = currentMapIdentities();
+        if (identities.some(identity =>
+            dim.includes(identity) || identity.includes(dim)
+        )) {
+            return true;
+        }
+
+        // BlueMap map labels are user-configurable. Match vanilla dimensions by
+        // their stable semantic token as a fallback.
+        if (dim === "minecraft:the_nether" || dim.endsWith(":the_nether")) {
+            return identities.some(identity => identity.includes("nether"));
+        }
+        if (dim === "minecraft:the_end" || dim.endsWith(":the_end")) {
+            return identities.some(identity => identity.includes("end"));
+        }
+        if (dim === "minecraft:overworld" || dim.endsWith(":overworld")) {
+            return identities.some(identity =>
+                identity.includes("overworld") ||
+                (
+                    identity.includes("world") &&
+                    !identity.includes("nether") &&
+                    !identity.includes("end")
+                )
+            );
+        }
+
+        return false;
     }
 
     function colorForBlock(blockId) {
@@ -124,26 +174,46 @@
             byBlock.get(block.block).push(block);
         }
 
-        const matrix = new THREE.Matrix4();
-        byBlock.forEach((blocks, blockId) => {
-            const mesh = new THREE.InstancedMesh(
-                sharedCubeGeometry,
-                materialForBlock(blockId),
-                blocks.length
-            );
+        if (typeof THREE.InstancedMesh === "function") {
+            const matrix = new THREE.Matrix4();
+            byBlock.forEach((blocks, blockId) => {
+                const mesh = new THREE.InstancedMesh(
+                    sharedCubeGeometry,
+                    materialForBlock(blockId),
+                    blocks.length
+                );
 
-            blocks.forEach((block, index) => {
-                matrix.makeTranslation(
+                blocks.forEach((block, index) => {
+                    matrix.makeTranslation(
+                        block.x + 0.5,
+                        block.y + 0.5,
+                        block.z + 0.5
+                    );
+                    mesh.setMatrixAt(index, matrix);
+                });
+
+                mesh.instanceMatrix.needsUpdate = true;
+                mesh.frustumCulled = false;
+                group.add(mesh);
+            });
+
+            return group;
+        }
+
+        // Some BlueMap builds expose only a subset of THREE on BlueMap.Three.
+        // Fall back to ordinary Mesh objects instead of making the model vanish.
+        console.warn("[CreateContraptions] THREE.InstancedMesh unavailable; using Mesh fallback");
+        byBlock.forEach((blocks, blockId) => {
+            const material = materialForBlock(blockId);
+            blocks.forEach(block => {
+                const mesh = new THREE.Mesh(sharedCubeGeometry, material);
+                mesh.position.set(
                     block.x + 0.5,
                     block.y + 0.5,
                     block.z + 0.5
                 );
-                mesh.setMatrixAt(index, matrix);
+                group.add(mesh);
             });
-
-            mesh.instanceMatrix.needsUpdate = true;
-            mesh.frustumCulled = false;
-            group.add(mesh);
         });
 
         return group;
@@ -174,11 +244,23 @@
     }
 
     function replaceRenderableModel(root, modelId) {
+        const model = modelCache.get(modelId);
+
+        let replacement;
+        try {
+            replacement = model ? buildVoxelModel(model) : buildFallbackModel();
+        } catch (error) {
+            console.error(
+                `[CreateContraptions] failed to build renderable model ${modelId}`,
+                error
+            );
+            return;
+        }
+
         while (root.children.length) {
             root.remove(root.children[0]);
         }
-        const model = modelCache.get(modelId);
-        root.add(model ? buildVoxelModel(model) : buildFallbackModel());
+        root.add(replacement);
         root.userData.modelId = modelId;
     }
 
@@ -244,12 +326,11 @@
     }
 
     function syncRenderables() {
-        const dimension = currentWorldKey();
         const wanted = new Set();
 
         liveStates.forEach((state, id) => {
             const item = state.data;
-            if (!item.dimension?.toLocaleLowerCase().includes(dimension)) return;
+            if (!dimensionMatchesCurrentMap(item.dimension)) return;
 
             wanted.add(id);
             let root = objects.get(id);
@@ -272,10 +353,9 @@
         if (!toggle.visible) return;
 
         const now = performance.now();
-        const dimension = currentWorldKey();
 
         liveStates.forEach((state, id) => {
-            if (!state.data.dimension?.toLocaleLowerCase().includes(dimension)) return;
+            if (!dimensionMatchesCurrentMap(state.data.dimension)) return;
             const root = objects.get(id);
             if (!root) return;
 
@@ -312,12 +392,33 @@
         return source;
     }
 
-    let lastWorld = currentWorldKey();
+    let lastWorldSignature = currentMapIdentities().join("|");
+    let lastDiagnostic = "";
+
     setInterval(() => {
-        const world = currentWorldKey();
-        if (world === lastWorld) return;
-        lastWorld = world;
-        syncRenderables();
+        const signature = currentMapIdentities().join("|");
+        if (signature !== lastWorldSignature) {
+            lastWorldSignature = signature;
+            syncRenderables();
+        }
+
+        const matched = [...liveStates.values()].filter(state =>
+            dimensionMatchesCurrentMap(state.data.dimension)
+        ).length;
+        const diagnostic = `${signature}:${liveStates.size}:${matched}:${objects.size}`;
+        if (diagnostic !== lastDiagnostic) {
+            lastDiagnostic = diagnostic;
+            console.log(
+                "[CreateContraptions] map identities:",
+                currentMapIdentities(),
+                "live:",
+                liveStates.size,
+                "matched:",
+                matched,
+                "rendered:",
+                objects.size
+            );
+        }
     }, 500);
 
     window.CreateContraptionOverlay = {
