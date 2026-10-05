@@ -88,10 +88,21 @@
                     }
                 }
 
+                const vehicleOverlay = window.CreateVehicleOverlay;
+                if (vehicleOverlay?.toggle) {
+                    const existingVehicles = root.markerSets?.get("create-vehicles");
+                    if (existingVehicles !== vehicleOverlay.toggle) {
+                        if (existingVehicles) root.remove(existingVehicles);
+                        root.add(vehicleOverlay.toggle);
+                        console.log("[CreateTrainBootstrap] restored Create 乗り物 MarkerSet");
+                    }
+                }
+
                 // Register runtime sets so subsequent marker refreshes preserve them.
                 root.__createTrainRuntimeMarkerSets?.add?.("create-rail-network");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-trains");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-contraptions");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-vehicles");
             } catch (error) {
                 console.debug("[CreateTrainBootstrap] core MarkerSet guard retry", error);
             }
@@ -140,6 +151,7 @@
             // Core renderer first, then optional UI/features that depend on its globals.
             await loadScript("train.js");
             await loadScript("contraptions.js");
+            await loadScript("vehicles.js");
             installCoreMarkerGuard();
             await loadScript("train-settings.js", { optional: true });
 
