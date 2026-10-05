@@ -49,6 +49,7 @@ jobs:
           cp bluemap/create-train-bootstrap.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/train.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/contraptions.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/vehicles.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/train-settings.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/train-labels.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/create-train-config.example.js dist/CreateWebAPI-server-update/bluemap-web/
