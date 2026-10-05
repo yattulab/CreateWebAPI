@@ -52,6 +52,7 @@ jobs:
           cp bluemap/vehicles.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/train-settings.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/train-labels.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/vehicle-labels.js dist/CreateWebAPI-server-update/bluemap-web/
           cp bluemap/create-train-config.example.js dist/CreateWebAPI-server-update/bluemap-web/
 
           cat > dist/CreateWebAPI-server-update/README-INSTALL.txt <<'EOF'
@@ -69,7 +70,9 @@ jobs:
           7. Restart the Minecraft server and hard-refresh the BlueMap page.
           8. Verify:
                http://<server>:8080/contraptions
-             and check for "Create カラクリ" in BlueMap's Markers menu.
+               http://<server>:8080/vehicles
+             and check for "Create カラクリ", "Create 乗り物", and
+             "Create 乗り物名" in BlueMap's Markers menu.
           EOF
 
       - name: Upload server update bundle
