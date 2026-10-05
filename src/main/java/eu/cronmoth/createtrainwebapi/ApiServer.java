@@ -2,6 +2,7 @@ package eu.cronmoth.createtrainwebapi;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import eu.cronmoth.createtrainwebapi.model.ContraptionModelData;
+import eu.cronmoth.createtrainwebapi.model.VehicleModelData;
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.handlers.PathHandler;
@@ -69,6 +70,41 @@ public class ApiServer {
             exchange.getResponseSender().send(mapper.writeValueAsString(model));
         });
 
+
+        pathHandler.addExactPath("/vehicles", exchange -> {
+            addJsonHeaders(exchange);
+            exchange.getResponseSender().send(
+                    mapper.writeValueAsString(SableVehicleInformation.getVehicles())
+            );
+        });
+
+        pathHandler.addPrefixPath("/vehicleModels", exchange -> {
+            addJsonHeaders(exchange);
+
+            String modelId = exchange.getRelativePath();
+            if (modelId.startsWith("/")) {
+                modelId = modelId.substring(1);
+            }
+            if (modelId.endsWith(".json")) {
+                modelId = modelId.substring(0, modelId.length() - 5);
+            }
+
+            if (modelId.isBlank()) {
+                exchange.setStatusCode(StatusCodes.BAD_REQUEST);
+                exchange.getResponseSender().send("{\"error\":\"model id is required\"}");
+                return;
+            }
+
+            VehicleModelData model = SableVehicleInformation.getModel(modelId);
+            if (model == null) {
+                exchange.setStatusCode(StatusCodes.NOT_FOUND);
+                exchange.getResponseSender().send("{\"error\":\"vehicle model not found\"}");
+                return;
+            }
+
+            exchange.getResponseSender().send(mapper.writeValueAsString(model));
+        });
+
         scheduler = Executors.newScheduledThreadPool(6);
 
         pathHandler.addExactPath("/trainsLive", exchange -> {
@@ -100,6 +136,25 @@ public class ApiServer {
                         // Server is shutting down.
                     } catch (Exception e) {
                         CreateTrainWebAPIMod.LOGGER.error("Failed to serialize contraption SSE update", e);
+                    }
+                }, 0, 200, TimeUnit.MILLISECONDS);
+
+                connection.addCloseTask(conn -> future.cancel(false));
+            }).handleRequest(exchange);
+        });
+
+
+        pathHandler.addExactPath("/vehiclesLive", exchange -> {
+            addSseHeaders(exchange);
+            new ServerSentEventHandler((connection, lastEventId) -> {
+                ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(() -> {
+                    if (!connection.isOpen()) return;
+                    try {
+                        connection.send(mapper.writeValueAsString(SableVehicleInformation.getVehicles()));
+                    } catch (RejectedExecutionException ignored) {
+                        // Server is shutting down.
+                    } catch (Exception e) {
+                        CreateTrainWebAPIMod.LOGGER.error("Failed to serialize vehicle SSE update", e);
                     }
                 }, 0, 200, TimeUnit.MILLISECONDS);
 
