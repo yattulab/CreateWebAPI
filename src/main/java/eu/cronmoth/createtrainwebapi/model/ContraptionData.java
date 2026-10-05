@@ -22,16 +22,25 @@ public class ContraptionData {
     public float rotationZ;
     public float secondYRotation;
 
-    /**
-     * Exact local-to-world rotation basis produced by Create.
-     * BlueMap can reconstruct the quaternion from these vectors without
-     * duplicating Create's entity-specific rotation order.
-     */
     public PointData basisX;
     public PointData basisY;
     public PointData basisZ;
 
     public boolean stalled;
+
+    /**
+     * true while the backing Contraption Entity is loaded in a server level.
+     * false means this is the last known state retained for BlueMap.
+     */
+    public boolean loaded;
+
+    /**
+     * Unix epoch milliseconds when the live entity was last observed.
+     */
+    public long lastSeen;
+
+    public ContraptionData() {
+    }
 
     public ContraptionData(AbstractContraptionEntity entity, String modelId) {
         Vec3 anchor = entity.getAnchorVec();
@@ -56,5 +65,27 @@ public class ContraptionData {
         this.basisZ = new PointData(entity.applyRotation(new Vec3(0, 0, 1), 1.0f));
 
         this.stalled = entity.isStalled();
+        this.loaded = true;
+        this.lastSeen = System.currentTimeMillis();
+    }
+
+    public ContraptionData(ContraptionData other) {
+        this.id = other.id;
+        this.dimension = other.dimension;
+        this.entityType = other.entityType;
+        this.modelId = other.modelId;
+        this.x = other.x;
+        this.y = other.y;
+        this.z = other.z;
+        this.rotationX = other.rotationX;
+        this.rotationY = other.rotationY;
+        this.rotationZ = other.rotationZ;
+        this.secondYRotation = other.secondYRotation;
+        this.basisX = other.basisX == null ? null : new PointData(other.basisX);
+        this.basisY = other.basisY == null ? null : new PointData(other.basisY);
+        this.basisZ = other.basisZ == null ? null : new PointData(other.basisZ);
+        this.stalled = other.stalled;
+        this.loaded = other.loaded;
+        this.lastSeen = other.lastSeen;
     }
 }
