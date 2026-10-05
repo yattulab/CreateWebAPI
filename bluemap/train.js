@@ -76,6 +76,8 @@ function patchBlueMap57MarkerManager() {
             "create-trains",
             "create-contraptions",
             "create-vehicles",
+            "create-train-labels",
+            "create-vehicle-labels",
         ]);
         return true;
     };
@@ -88,6 +90,8 @@ function patchBlueMap57MarkerManager() {
             "create-trains",
             "create-contraptions",
             "create-vehicles",
+            "create-train-labels",
+            "create-vehicle-labels",
         ]);
     };
 
