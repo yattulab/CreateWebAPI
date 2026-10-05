@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -22,10 +23,17 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 public final class ContraptionInformation {
     private static volatile List<ContraptionData> snapshot = List.of();
     private static volatile Map<String, ContraptionModelData> modelSnapshot = Map.of();
+
+    // A moving contraption's block structure is normally immutable until it is
+    // disassembled. Cache the expensive block-list conversion/hash by object
+    // identity and let WeakHashMap release entries after disassembly.
+    private static final Map<Contraption, ContraptionModelData> modelCache =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private ContraptionInformation() {
     }
@@ -55,7 +63,7 @@ public final class ContraptionInformation {
                     continue;
                 }
 
-                ContraptionModelData model = buildModel(contraption);
+                ContraptionModelData model = getOrBuildModel(contraption);
                 activeModelIds.add(model.id);
                 models.putIfAbsent(model.id, model);
                 contraptions.add(new ContraptionData(entity, model.id));
@@ -80,6 +88,12 @@ public final class ContraptionInformation {
 
     public static boolean hasModel(String id) {
         return modelSnapshot.containsKey(id);
+    }
+
+    private static ContraptionModelData getOrBuildModel(Contraption contraption) {
+        synchronized (modelCache) {
+            return modelCache.computeIfAbsent(contraption, ContraptionInformation::buildModel);
+        }
     }
 
     private static ContraptionModelData buildModel(Contraption contraption) {
