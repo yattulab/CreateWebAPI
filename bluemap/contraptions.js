@@ -82,6 +82,46 @@
         return [...new Set(values)];
     }
 
+    function configuredDimensionForCurrentMap() {
+        const overrides = window.CREATE_MAP_DIMENSION_OVERRIDES;
+        if (!overrides || typeof overrides !== "object") return null;
+
+        const identities = currentMapIdentities();
+        for (const identity of identities) {
+            const configured = overrides[identity];
+            if (typeof configured === "string" && configured.length > 0) {
+                return configured.toLocaleLowerCase();
+            }
+        }
+
+        return null;
+    }
+
+    function inferredDimensionForCurrentMap() {
+        const configured = configuredDimensionForCurrentMap();
+        if (configured) return configured;
+
+        const identities = currentMapIdentities();
+
+        if (identities.some(identity => identity.includes("nether"))) {
+            return "minecraft:the_nether";
+        }
+        if (identities.some(identity =>
+            identity === "end" ||
+            identity.includes("the_end") ||
+            identity.includes("the end")
+        )) {
+            return "minecraft:the_end";
+        }
+
+        // BlueMap does not expose a canonical Minecraft dimension id on Map.data.
+        // Therefore a custom-labelled vanilla map such as "NNSR Craft" cannot be
+        // distinguished from the overworld by name. Treat any map that is not
+        // recognisably Nether/End as overworld. Modded dimensions can override
+        // this with CREATE_MAP_DIMENSION_OVERRIDES.
+        return "minecraft:overworld";
+    }
+
     function dimensionMatchesCurrentMap(dimension) {
         const dim = String(dimension ?? "").toLocaleLowerCase();
         if (!dim) return false;
@@ -93,26 +133,7 @@
             return true;
         }
 
-        // BlueMap map labels are user-configurable. Match vanilla dimensions by
-        // their stable semantic token as a fallback.
-        if (dim === "minecraft:the_nether" || dim.endsWith(":the_nether")) {
-            return identities.some(identity => identity.includes("nether"));
-        }
-        if (dim === "minecraft:the_end" || dim.endsWith(":the_end")) {
-            return identities.some(identity => identity.includes("end"));
-        }
-        if (dim === "minecraft:overworld" || dim.endsWith(":overworld")) {
-            return identities.some(identity =>
-                identity.includes("overworld") ||
-                (
-                    identity.includes("world") &&
-                    !identity.includes("nether") &&
-                    !identity.includes("end")
-                )
-            );
-        }
-
-        return false;
+        return dim === inferredDimensionForCurrentMap();
     }
 
     function colorForBlock(blockId) {
@@ -411,6 +432,8 @@
             console.log(
                 "[CreateContraptions] map identities:",
                 currentMapIdentities(),
+                "dimension:",
+                inferredDimensionForCurrentMap(),
                 "live:",
                 liveStates.size,
                 "matched:",
