@@ -18,6 +18,9 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.fml.ModList;
 
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
@@ -59,7 +62,11 @@ public final class SableVehicleInformation {
     private static boolean dirty;
     private static boolean sableAvailable;
     private static Class<?> subLevelContainerClass;
+    private static Class<?> serverSubLevelContainerClass;
     private static Class<?> subLevelObserverClass;
+    private static MethodHandle getContainerHandle;
+    private static MethodHandle getAllSubLevelsHandle;
+    private static MethodHandle addObserverHandle;
 
     private SableVehicleInformation() {
     }
@@ -149,7 +156,7 @@ public final class SableVehicleInformation {
                     knownVehicles.put(id, data);
                     liveIds.add(id);
                     changed = true;
-                } catch (Exception e) {
+                } catch (Exception | LinkageError e) {
                     CreateTrainWebAPIMod.LOGGER.debug(
                             "Failed to inspect one Sable sub-level",
                             e
@@ -202,7 +209,7 @@ public final class SableVehicleInformation {
                 if (result instanceof Boolean b && b) {
                     return true;
                 }
-            } catch (Exception ignored) {
+            } catch (Exception | LinkageError ignored) {
             }
         }
 
@@ -265,13 +272,47 @@ public final class SableVehicleInformation {
         try {
             subLevelContainerClass =
                     Class.forName("dev.ryanhcode.sable.api.sublevel.SubLevelContainer");
+            serverSubLevelContainerClass =
+                    Class.forName("dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer");
             subLevelObserverClass =
                     Class.forName("dev.ryanhcode.sable.api.sublevel.SubLevelObserver");
-            return true;
-        } catch (ClassNotFoundException e) {
-            CreateTrainWebAPIMod.LOGGER.warn(
-                    "Sable is loaded but its public SubLevel API was not found"
+
+            // Do NOT use Class#getMethod(s) on SubLevelContainer here.
+            // Sable 2.0.5 keeps both getContainer(ServerLevel) and
+            // getContainer(ClientLevel) on the same common class. On a dedicated
+            // server, reflecting over that method table attempts to resolve
+            // net.minecraft.client.multiplayer.ClientLevel and crashes with
+            // NoClassDefFoundError. MethodHandles resolve only the exact
+            // server-side descriptors below.
+            MethodHandles.Lookup lookup = MethodHandles.publicLookup();
+
+            getContainerHandle = lookup.findStatic(
+                    subLevelContainerClass,
+                    "getContainer",
+                    MethodType.methodType(serverSubLevelContainerClass, ServerLevel.class)
             );
+
+            getAllSubLevelsHandle = lookup.findVirtual(
+                    subLevelContainerClass,
+                    "getAllSubLevels",
+                    MethodType.methodType(List.class)
+            );
+
+            addObserverHandle = lookup.findVirtual(
+                    subLevelContainerClass,
+                    "addObserver",
+                    MethodType.methodType(void.class, subLevelObserverClass)
+            );
+
+            return true;
+        } catch (ReflectiveOperationException | LinkageError e) {
+            CreateTrainWebAPIMod.LOGGER.error(
+                    "Sable is loaded but its server-side SubLevel API could not be initialized; vehicle integration is disabled",
+                    e
+            );
+            getContainerHandle = null;
+            getAllSubLevelsHandle = null;
+            addObserverHandle = null;
             return false;
         }
     }
@@ -477,9 +518,9 @@ public final class SableVehicleInformation {
                     }
             );
 
-            invoke(container, "addObserver", observer);
+            invokeAddObserver(container, observer);
             observedContainers.add(container);
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             CreateTrainWebAPIMod.LOGGER.warn(
                     "Could not register Sable vehicle lifecycle observer; unloaded vehicles will still be cached, but permanent removals may require a restart cleanup",
                     e
@@ -528,25 +569,74 @@ public final class SableVehicleInformation {
     }
 
     private static Object getContainer(ServerLevel level) {
-        if (!sableAvailable || subLevelContainerClass == null) {
+        if (!sableAvailable || getContainerHandle == null) {
             return null;
         }
 
         try {
-            Method method = subLevelContainerClass.getMethod("getContainer", ServerLevel.class);
-            return method.invoke(null, level);
-        } catch (Exception e) {
+            return getContainerHandle.invoke(level);
+        } catch (LinkageError e) {
+            disableSableIntegration("Failed to resolve Sable server container", e);
+            return null;
+        } catch (Throwable e) {
+            CreateTrainWebAPIMod.LOGGER.debug(
+                    "Failed to get Sable server container for {}",
+                    level.dimension().location(),
+                    e
+            );
             return null;
         }
     }
 
     private static List<?> getAllSubLevels(Object container) {
-        try {
-            Object value = invoke(container, "getAllSubLevels");
-            return value instanceof List<?> list ? list : List.of();
-        } catch (Exception e) {
+        if (!sableAvailable || getAllSubLevelsHandle == null || container == null) {
             return List.of();
         }
+
+        try {
+            Object value = getAllSubLevelsHandle.invoke(container);
+            return value instanceof List<?> list ? list : List.of();
+        } catch (LinkageError e) {
+            disableSableIntegration("Failed to enumerate Sable server sub-levels", e);
+            return List.of();
+        } catch (Throwable e) {
+            CreateTrainWebAPIMod.LOGGER.debug(
+                    "Failed to enumerate Sable server sub-levels",
+                    e
+            );
+            return List.of();
+        }
+    }
+
+    private static void invokeAddObserver(Object container, Object observer) throws Exception {
+        if (!sableAvailable || addObserverHandle == null) {
+            throw new IllegalStateException("Sable addObserver MethodHandle is unavailable");
+        }
+
+        try {
+            addObserverHandle.invoke(container, observer);
+        } catch (LinkageError e) {
+            disableSableIntegration("Failed to register Sable server observer", e);
+            throw e;
+        } catch (Throwable e) {
+            if (e instanceof Exception exception) {
+                throw exception;
+            }
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void disableSableIntegration(String reason, LinkageError error) {
+        if (!sableAvailable) {
+            return;
+        }
+
+        sableAvailable = false;
+        CreateTrainWebAPIMod.LOGGER.error(
+                "{}; Sable vehicle integration has been disabled to keep the dedicated server running",
+                reason,
+                error
+        );
     }
 
     private static Object invoke(Object target, String methodName, Object... args) throws Exception {
