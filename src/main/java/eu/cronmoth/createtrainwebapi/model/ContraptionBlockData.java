@@ -15,6 +15,10 @@ public class ContraptionBlockData {
     public String block;
     public Map<String, String> properties;
 
+    public ContraptionBlockData() {
+        this.properties = new TreeMap<>();
+    }
+
     public ContraptionBlockData(StructureBlockInfo info) {
         BlockPos pos = info.pos();
         BlockState state = info.state();
