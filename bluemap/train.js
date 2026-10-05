@@ -75,6 +75,7 @@ function patchBlueMap57MarkerManager() {
             "create-rail-network",
             "create-trains",
             "create-contraptions",
+            "create-vehicles",
         ]);
         return true;
     };
@@ -86,6 +87,7 @@ function patchBlueMap57MarkerManager() {
             "create-rail-network",
             "create-trains",
             "create-contraptions",
+            "create-vehicles",
         ]);
     };
 
@@ -673,14 +675,19 @@ function renderOverlayLoop() {
     animateTrains();
 
     const contraptions = window.CreateContraptionOverlay;
+    const vehicles = window.CreateVehicleOverlay;
     contraptions?.animate?.();
+    vehicles?.animate?.();
 
     const camera = mapViewer.camera;
     const showLines = routeToggle.visible;
     const showTrains = trainToggle.visible;
     const showContraptions = contraptions?.toggle?.visible ?? false;
+    const showVehicles = vehicles?.toggle?.visible ?? false;
     const contraptionsThroughTerrain =
         window.CREATE_CONTRAPTIONS_THROUGH_TERRAIN ?? false;
+    const vehiclesThroughTerrain =
+        window.CREATE_VEHICLES_THROUGH_TERRAIN ?? false;
 
     // Render depth-tested elements first.
     if (showLines && !linesVisibleThroughTerrain) renderer.render(linesScene, camera);
@@ -688,18 +695,25 @@ function renderOverlayLoop() {
     if (showContraptions && !contraptionsThroughTerrain) {
         renderer.render(contraptions.scene, camera);
     }
+    if (showVehicles && !vehiclesThroughTerrain) {
+        renderer.render(vehicles.scene, camera);
+    }
 
     // Render through-terrain elements after clearing the depth buffer.
     if (
         (showLines && linesVisibleThroughTerrain) ||
         (showTrains && trainsVisibleThroughTerrain) ||
-        (showContraptions && contraptionsThroughTerrain)
+        (showContraptions && contraptionsThroughTerrain) ||
+        (showVehicles && vehiclesThroughTerrain)
     ) {
         renderer.clearDepth();
         if (showLines && linesVisibleThroughTerrain) renderer.render(linesScene, camera);
         if (showTrains && trainsVisibleThroughTerrain) renderer.render(trainsScene, camera);
         if (showContraptions && contraptionsThroughTerrain) {
             renderer.render(contraptions.scene, camera);
+        }
+        if (showVehicles && vehiclesThroughTerrain) {
+            renderer.render(vehicles.scene, camera);
         }
     }
 
