@@ -74,6 +74,7 @@ function patchBlueMap57MarkerManager() {
             "bm-popup-set",
             "create-rail-network",
             "create-trains",
+            "create-contraptions",
         ]);
         return true;
     };
@@ -84,6 +85,7 @@ function patchBlueMap57MarkerManager() {
             "bm-popup-set",
             "create-rail-network",
             "create-trains",
+            "create-contraptions",
         ]);
     };
 
@@ -670,22 +672,35 @@ function rotateGeometryToDirection(geometry, assemblyDirection, targetDirection 
 function renderOverlayLoop() {
     animateTrains();
 
+    const contraptions = window.CreateContraptionOverlay;
+    contraptions?.animate?.();
+
     const camera = mapViewer.camera;
     const showLines = routeToggle.visible;
     const showTrains = trainToggle.visible;
+    const showContraptions = contraptions?.toggle?.visible ?? false;
+    const contraptionsThroughTerrain =
+        window.CREATE_CONTRAPTIONS_THROUGH_TERRAIN ?? false;
 
     // Render depth-tested elements first.
     if (showLines && !linesVisibleThroughTerrain) renderer.render(linesScene, camera);
     if (showTrains && !trainsVisibleThroughTerrain) renderer.render(trainsScene, camera);
+    if (showContraptions && !contraptionsThroughTerrain) {
+        renderer.render(contraptions.scene, camera);
+    }
 
     // Render through-terrain elements after clearing the depth buffer.
     if (
         (showLines && linesVisibleThroughTerrain) ||
-        (showTrains && trainsVisibleThroughTerrain)
+        (showTrains && trainsVisibleThroughTerrain) ||
+        (showContraptions && contraptionsThroughTerrain)
     ) {
         renderer.clearDepth();
         if (showLines && linesVisibleThroughTerrain) renderer.render(linesScene, camera);
         if (showTrains && trainsVisibleThroughTerrain) renderer.render(trainsScene, camera);
+        if (showContraptions && contraptionsThroughTerrain) {
+            renderer.render(contraptions.scene, camera);
+        }
     }
 
     requestAnimationFrame(renderOverlayLoop);
