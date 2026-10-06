@@ -26,6 +26,7 @@ public class CreateTrainWebAPIMod {
     public CreateTrainWebAPIMod(IEventBus modEventBus, ModContainer modContainer) {
         NeoForge.EVENT_BUS.register(this);
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        VehiclePrbmRenderer.install();
     }
 
     @SubscribeEvent
