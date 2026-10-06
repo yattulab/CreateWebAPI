@@ -1,12 +1,14 @@
 /*
  * Live Sable physics vehicle overlay for BlueMap 5.7.
  *
- * Physics Assembler vehicles (Create Aeronautics aircraft, ships, cars, etc.)
- * live inside Sable SubLevels rather than ordinary Create Contraption entities.
+ * Textured vehicle geometry uses the same PRBM + hiresMaterial path as trains.
+ * JSON voxel rendering remains as a temporary fallback when PRBM generation is
+ * unavailable during startup or for an unsupported block/model.
  *
  * Consumes:
  *   - /vehiclesLive
- *   - /vehicleModels/<modelId>
+ *   - /vehicleModels/<modelId>.prbm
+ *   - /vehicleModels/<modelId> (fallback JSON)
  */
 (() => {
     if (window.__createVehicleOverlayInstalled) return;
@@ -14,6 +16,8 @@
 
     const host = (window.CREATE_TRAIN_WEB_API_URL ?? "http://localhost:8080")
         .replace(/\/+$/, "");
+
+    const PRBM_RETRY_MS = 10000;
 
     const mapViewer = window.bluemap?.mapViewer;
     const renderer = mapViewer?.renderer;
@@ -27,6 +31,10 @@
     const scene = new THREE.Scene();
     const objects = new Map();
     const liveStates = new Map();
+
+    // modelCache values:
+    //   { kind: "prbm", geometry }
+    //   { kind: "voxel", data, retryAt }
     const modelCache = new Map();
     const modelRequests = new Map();
 
@@ -128,6 +136,18 @@
         return dim === inferredDimensionForCurrentMap();
     }
 
+    function findLoadedBlueMap() {
+        if (mapViewer.map?.hiresTileManager) {
+            return mapViewer.map;
+        }
+
+        let found = null;
+        window.bluemap?.maps?.forEach?.(map => {
+            if (!found && map.hiresTileManager) found = map;
+        });
+        return found;
+    }
+
     function colorForBlock(blockId) {
         let hash = 2166136261;
         for (let i = 0; i < blockId.length; i++) {
@@ -150,27 +170,72 @@
         return materialCache.get(blockId);
     }
 
-    async function loadModel(modelId) {
-        if (modelCache.has(modelId)) return modelCache.get(modelId);
+    async function loadJsonFallback(modelId) {
+        const response = await fetch(
+            `${host}/vehicleModels/${encodeURIComponent(modelId)}`
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+    }
+
+    async function loadModel(modelId, dimension) {
+        const cached = modelCache.get(modelId);
+        if (
+            cached &&
+            !(cached.kind === "voxel" && Date.now() >= cached.retryAt)
+        ) {
+            return cached;
+        }
+
         if (modelRequests.has(modelId)) return modelRequests.get(modelId);
 
         const request = (async () => {
             try {
-                const response = await fetch(
-                    `${host}/vehicleModels/${encodeURIComponent(modelId)}`
-                );
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const prbmUrl =
+                    `${host}/vehicleModels/${encodeURIComponent(modelId)}.prbm` +
+                    `?dimension=${encodeURIComponent(dimension ?? "")}`;
 
-                const model = await response.json();
+                const response = await fetch(prbmUrl);
+                if (!response.ok) throw new Error(`PRBM HTTP ${response.status}`);
+
+                const map = findLoadedBlueMap();
+                const loader = map?.hiresTileManager?.tileLoader?.bufferGeometryLoader;
+                if (!loader) {
+                    throw new Error("BlueMap PRBM geometry loader is unavailable");
+                }
+
+                const buffer = await response.arrayBuffer();
+                const geometry = loader.parse(buffer);
+                const model = { kind: "prbm", geometry };
                 modelCache.set(modelId, model);
-                return model;
-            } catch (error) {
-                console.error(
-                    `[CreateVehicles] failed to load model ${modelId}`,
-                    error
+
+                console.log(
+                    `[CreateVehicles] textured PRBM loaded: ${modelId}`
                 );
-                modelCache.set(modelId, null);
-                return null;
+                return model;
+            } catch (prbmError) {
+                console.debug(
+                    `[CreateVehicles] PRBM unavailable for ${modelId}; using voxel fallback`,
+                    prbmError
+                );
+
+                try {
+                    const data = await loadJsonFallback(modelId);
+                    const model = {
+                        kind: "voxel",
+                        data,
+                        retryAt: Date.now() + PRBM_RETRY_MS,
+                    };
+                    modelCache.set(modelId, model);
+                    return model;
+                } catch (jsonError) {
+                    console.error(
+                        `[CreateVehicles] failed to load vehicle model ${modelId}`,
+                        jsonError
+                    );
+                    modelCache.delete(modelId);
+                    return null;
+                }
             } finally {
                 modelRequests.delete(modelId);
             }
@@ -237,6 +302,28 @@
         return group;
     }
 
+    function buildPrbmModel(model) {
+        const map = findLoadedBlueMap();
+        let material = map?.hiresMaterial;
+
+        if (!material) {
+            material = model.geometry.getAttribute("color")
+                ? new THREE.MeshStandardMaterial({
+                    vertexColors: true,
+                    flatShading: true,
+                })
+                : new THREE.MeshStandardMaterial({
+                    color: 0x55aacc,
+                    flatShading: true,
+                });
+        }
+
+        const mesh = new THREE.Mesh(model.geometry, material);
+        mesh.frustumCulled = false;
+        mesh.userData.createVehiclePrbm = true;
+        return mesh;
+    }
+
     function buildFallbackModel() {
         const group = new THREE.Group();
         const mesh = new THREE.Mesh(
@@ -252,23 +339,27 @@
         return group;
     }
 
+    function buildRenderableModel(model) {
+        if (!model) return buildFallbackModel();
+        if (model.kind === "prbm") return buildPrbmModel(model);
+        if (model.kind === "voxel") return buildVoxelModel(model.data);
+        return buildFallbackModel();
+    }
+
     function createRenderable(data) {
         const root = new THREE.Group();
         root.userData.modelId = data.modelId;
 
-        const model = modelCache.get(data.modelId);
-        root.add(model ? buildVoxelModel(model) : buildFallbackModel());
+        root.add(buildRenderableModel(modelCache.get(data.modelId)));
 
         scene.add(root);
         return root;
     }
 
     function replaceRenderableModel(root, modelId) {
-        const model = modelCache.get(modelId);
-
         let replacement;
         try {
-            replacement = model ? buildVoxelModel(model) : buildFallbackModel();
+            replacement = buildRenderableModel(modelCache.get(modelId));
         } catch (error) {
             console.error(
                 `[CreateVehicles] failed to build renderable model ${modelId}`,
@@ -314,6 +405,36 @@
         );
     }
 
+    function ensureModelLoad(item) {
+        const cached = modelCache.get(item.modelId);
+        const needsRetry =
+            cached?.kind === "voxel" && Date.now() >= cached.retryAt;
+
+        if (
+            (cached && !needsRetry) ||
+            modelRequests.has(item.modelId)
+        ) {
+            return;
+        }
+
+        if (needsRetry) {
+            modelCache.delete(item.modelId);
+        }
+
+        loadModel(item.modelId, item.dimension).then(model => {
+            if (!model) return;
+
+            liveStates.forEach((state, id) => {
+                if (state.data.modelId !== item.modelId) return;
+
+                const root = objects.get(id);
+                if (root && root.userData.modelId === item.modelId) {
+                    replaceRenderableModel(root, item.modelId);
+                }
+            });
+        });
+    }
+
     function updateLiveStates(data) {
         const now = performance.now();
         const seen = new Set();
@@ -348,14 +469,7 @@
                 endTime: previous && item.loaded ? now + 200 : now,
             });
 
-            if (!modelCache.has(item.modelId) && !modelRequests.has(item.modelId)) {
-                loadModel(item.modelId).then(() => {
-                    const root = objects.get(item.id);
-                    if (root && root.userData.modelId === item.modelId) {
-                        replaceRenderableModel(root, item.modelId);
-                    }
-                });
-            }
+            ensureModelLoad(item);
         }
 
         for (const id of [...liveStates.keys()]) {
@@ -387,6 +501,12 @@
             if (wanted.has(id)) return;
             scene.remove(root);
             objects.delete(id);
+        });
+    }
+
+    function refreshMaterialsForCurrentMap() {
+        objects.forEach(root => {
+            replaceRenderableModel(root, root.userData.modelId);
         });
     }
 
@@ -446,7 +566,10 @@
         if (signature !== lastWorldSignature) {
             lastWorldSignature = signature;
             syncRenderables();
+            refreshMaterialsForCurrentMap();
         }
+
+        liveStates.forEach(state => ensureModelLoad(state.data));
 
         const matched = [...liveStates.values()].filter(state =>
             dimensionMatchesCurrentMap(state.data.dimension)
@@ -456,8 +579,12 @@
             state.data.loaded
         ).length;
 
+        const prbmModels = [...modelCache.values()].filter(model =>
+            model?.kind === "prbm"
+        ).length;
+
         const diagnostic =
-            `${signature}:${liveStates.size}:${matched}:${loaded}:${objects.size}`;
+            `${signature}:${liveStates.size}:${matched}:${loaded}:${objects.size}:${prbmModels}`;
 
         if (diagnostic !== lastDiagnostic) {
             lastDiagnostic = diagnostic;
@@ -473,7 +600,9 @@
                 "loaded:",
                 loaded,
                 "rendered:",
-                objects.size
+                objects.size,
+                "PRBM models:",
+                prbmModels
             );
         }
     }, 500);
@@ -486,5 +615,5 @@
     };
 
     connect();
-    console.log("[CreateVehicles] Sable vehicle overlay started");
+    console.log("[CreateVehicles] Sable vehicle overlay started (PRBM textured rendering)");
 })();
