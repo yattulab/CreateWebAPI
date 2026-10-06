@@ -14,6 +14,7 @@ import io.undertow.util.HttpString;
 import io.undertow.util.StatusCodes;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -79,17 +80,20 @@ public class ApiServer {
         });
 
         pathHandler.addPrefixPath("/vehicleModels", exchange -> {
-            addJsonHeaders(exchange);
-
             String modelId = exchange.getRelativePath();
             if (modelId.startsWith("/")) {
                 modelId = modelId.substring(1);
             }
-            if (modelId.endsWith(".json")) {
+
+            boolean prbm = modelId.endsWith(".prbm");
+            if (prbm) {
+                modelId = modelId.substring(0, modelId.length() - 5);
+            } else if (modelId.endsWith(".json")) {
                 modelId = modelId.substring(0, modelId.length() - 5);
             }
 
             if (modelId.isBlank()) {
+                addJsonHeaders(exchange);
                 exchange.setStatusCode(StatusCodes.BAD_REQUEST);
                 exchange.getResponseSender().send("{\"error\":\"model id is required\"}");
                 return;
@@ -97,11 +101,51 @@ public class ApiServer {
 
             VehicleModelData model = SableVehicleInformation.getModel(modelId);
             if (model == null) {
+                addJsonHeaders(exchange);
                 exchange.setStatusCode(StatusCodes.NOT_FOUND);
                 exchange.getResponseSender().send("{\"error\":\"vehicle model not found\"}");
                 return;
             }
 
+            if (prbm) {
+                String dimension = null;
+                var dimensions = exchange.getQueryParameters().get("dimension");
+                if (dimensions != null && !dimensions.isEmpty()) {
+                    dimension = dimensions.getFirst();
+                }
+
+                if (!VehiclePrbmRenderer.isReady()) {
+                    addJsonHeaders(exchange);
+                    exchange.setStatusCode(StatusCodes.SERVICE_UNAVAILABLE);
+                    exchange.getResponseSender().send("{\"error\":\"BlueMap PRBM renderer is not ready\"}");
+                    return;
+                }
+
+                byte[] bytes = VehiclePrbmRenderer.getOrCreate(modelId, dimension);
+                if (bytes == null) {
+                    addJsonHeaders(exchange);
+                    exchange.setStatusCode(StatusCodes.INTERNAL_SERVER_ERROR);
+                    exchange.getResponseSender().send("{\"error\":\"failed to render vehicle PRBM\"}");
+                    return;
+                }
+
+                exchange.getResponseHeaders().put(
+                        Headers.CONTENT_TYPE,
+                        "application/octet-stream"
+                );
+                exchange.getResponseHeaders().put(
+                        new HttpString("Access-Control-Allow-Origin"),
+                        "*"
+                );
+                exchange.getResponseHeaders().put(
+                        Headers.CACHE_CONTROL,
+                        "public, max-age=31536000, immutable"
+                );
+                exchange.getResponseSender().send(ByteBuffer.wrap(bytes));
+                return;
+            }
+
+            addJsonHeaders(exchange);
             exchange.getResponseSender().send(mapper.writeValueAsString(model));
         });
 
