@@ -18,6 +18,7 @@ import de.bluecolored.bluemap.core.world.LightData;
 import de.bluecolored.bluemap.core.world.biome.Biome;
 import de.bluecolored.bluemap.core.world.block.BlockAccess;
 import de.bluecolored.bluemap.core.world.block.BlockNeighborhood;
+import de.bluecolored.bluemap.core.world.mca.MCAWorld;
 import eu.cronmoth.createtrainwebapi.model.ContraptionBlockData;
 import eu.cronmoth.createtrainwebapi.model.VehicleModelData;
 import net.neoforged.fml.ModList;
@@ -143,11 +144,13 @@ public final class VehiclePrbmRenderer {
         String wanted = normalizeDimension(dimension);
         for (BmMap map : MAPS) {
             try {
-                String mapDimension = normalizeDimension(
-                        map.getWorld().getDimension().getKey().getValue()
-                );
-                if (wanted.equals(mapDimension)) {
-                    return map;
+                if (map.getWorld() instanceof MCAWorld world) {
+                    String mapDimension = normalizeDimension(
+                            world.getDimension().getKey().getValue()
+                    );
+                    if (wanted.equals(mapDimension)) {
+                        return map;
+                    }
                 }
             } catch (Throwable ignored) {
             }
