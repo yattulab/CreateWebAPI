@@ -151,7 +151,7 @@
 
         const name = String(mapViewer.map?.data?.name ?? "").toLocaleLowerCase();
         if (name.includes("nether")) return "minecraft:the_nether";
-        if (name.includes("the_end") || name.includes("the end") || name === "end") {
+        if (/(^|[\\s(_: -])(?:the[_\\s-]+)?end($|[\\s): _-])/.test(name)) {
             return "minecraft:the_end";
         }
         return "minecraft:overworld";
