@@ -27,6 +27,7 @@ function verify(map, overrides, expectedDimension, expectedIds) {
     const globals = {
         mapViewer: { map: { data: map } },
         networkData: { nodes },
+        fixtureNodes: nodes,
         window: { CREATE_MAP_DIMENSION_OVERRIDES: overrides },
     };
 
@@ -35,7 +36,7 @@ function verify(map, overrides, expectedDimension, expectedIds) {
         ({
             dimension: currentWorldKey(),
             nodeIds: Array.from(nodeMapForDimension(currentWorldKey()).keys()),
-            matched: nodes.map(node => dimensionMatchesCurrentMap(node.dimensionLocationData.dimension)),
+            matched: fixtureNodes.map(node => dimensionMatchesCurrentMap(node.dimensionLocationData.dimension)),
         })`,
         globals
     );
