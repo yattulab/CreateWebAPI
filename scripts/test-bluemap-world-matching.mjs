@@ -44,6 +44,7 @@ function verify(map, overrides, expectedDimension, expectedIds) {
 
     const labels = runInNewContext(
         `${labelDimensionCode}
+        networkData = { nodes: fixtureNodes };
         ({
             dimension: currentWorldKey(),
             nodeIds: Array.from(nodeMapForDimension(currentWorldKey()).keys()),
@@ -51,6 +52,7 @@ function verify(map, overrides, expectedDimension, expectedIds) {
         {
             mapViewer: globals.mapViewer,
             window: globals.window,
+            fixtureNodes: nodes,
             Map,
         }
     );
