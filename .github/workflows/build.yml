@@ -1,6 +1,12 @@
 name: Build
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -21,11 +27,67 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Validate BlueMap JavaScript and map matching
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in bluemap/*.js; do
+            node --check "$script"
+          done
+          node scripts/test-bluemap-world-matching.mjs
+
       - name: Build with Gradle
         run: ./gradlew build
-      - name: Upload a Build Artifact
-        uses: actions/upload-artifact@v7.0.0
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v7.0.1
         with:
-          name: CreateTrainWebAPI
+          name: CreateWebAPI
           path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assemble server update bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/CreateWebAPI-server-update/mods
+          mkdir -p dist/CreateWebAPI-server-update/bluemap-web
+
+          cp build/libs/*.jar dist/CreateWebAPI-server-update/mods/
+          cp bluemap/create-train-bootstrap.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/train.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/contraptions.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/vehicles.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/train-settings.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/train-labels.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/vehicle-labels.js dist/CreateWebAPI-server-update/bluemap-web/
+          cp bluemap/create-train-config.example.js dist/CreateWebAPI-server-update/bluemap-web/
+
+          cat > dist/CreateWebAPI-server-update/README-INSTALL.txt <<'EOF'
+          CreateWebAPI server update bundle
+
+          1. Stop the Minecraft server.
+          2. Remove the old CreateTrainWebAPI/CreateWebAPI jar from mods/.
+          3. Copy mods/*.jar into the Minecraft server mods/ directory.
+          4. Copy the files from bluemap-web/ into the BlueMap web root, replacing
+             files with the same names.
+          5. Do NOT overwrite an existing deployment-specific create-train-config.js.
+             create-train-config.example.js is included only as a reference.
+          6. webapp.conf should continue to load only:
+               create-train-bootstrap.js
+          7. Restart the Minecraft server and hard-refresh the BlueMap page.
+          8. Verify:
+               http://<server>:8080/contraptions
+               http://<server>:8080/vehicles
+             and check for "Create カラクリ", "Create 乗り物", and
+             "Create 乗り物名" in BlueMap's Markers menu.
+          EOF
+
+      - name: Upload server update bundle
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: CreateWebAPI-server-update
+          path: dist/CreateWebAPI-server-update/
+          if-no-files-found: error
           retention-days: 90

@@ -78,10 +78,33 @@
                     }
                 }
 
-                // train-labels.js creates this registry when installed. Register the
-                // core sets there too so subsequent marker refreshes preserve all three.
+                const contraptionOverlay = window.CreateContraptionOverlay;
+                if (contraptionOverlay?.toggle) {
+                    const existingContraptions = root.markerSets?.get("create-contraptions");
+                    if (existingContraptions !== contraptionOverlay.toggle) {
+                        if (existingContraptions) root.remove(existingContraptions);
+                        root.add(contraptionOverlay.toggle);
+                        console.log("[CreateTrainBootstrap] restored Create カラクリ MarkerSet");
+                    }
+                }
+
+                const vehicleOverlay = window.CreateVehicleOverlay;
+                if (vehicleOverlay?.toggle) {
+                    const existingVehicles = root.markerSets?.get("create-vehicles");
+                    if (existingVehicles !== vehicleOverlay.toggle) {
+                        if (existingVehicles) root.remove(existingVehicles);
+                        root.add(vehicleOverlay.toggle);
+                        console.log("[CreateTrainBootstrap] restored Create 乗り物 MarkerSet");
+                    }
+                }
+
+                // Register runtime sets so subsequent marker refreshes preserve them.
                 root.__createTrainRuntimeMarkerSets?.add?.("create-rail-network");
                 root.__createTrainRuntimeMarkerSets?.add?.("create-trains");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-contraptions");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-vehicles");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-train-labels");
+                root.__createTrainRuntimeMarkerSets?.add?.("create-vehicle-labels");
             } catch (error) {
                 console.debug("[CreateTrainBootstrap] core MarkerSet guard retry", error);
             }
@@ -91,35 +114,51 @@
         setInterval(ensure, 500);
     }
 
-    function installTrainLabelDistanceLimit() {
+    function installLabelDistanceLimits() {
         const HtmlMarker = window.BlueMap?.HtmlMarker;
-        if (!HtmlMarker || HtmlMarker.prototype.__createTrainDistanceLimitPatched) return;
+        if (!HtmlMarker || HtmlMarker.prototype.__createLabelDistanceLimitsPatched) return;
 
-        const configured = Number(window.CREATE_TRAIN_LABEL_MAX_DISTANCE ?? 4096);
-        const maxDistance = Number.isFinite(configured) && configured > 0
-            ? configured
-            : 4096;
+        function positiveDistance(value, fallback) {
+            const number = Number(value);
+            return Number.isFinite(number) && number > 0 ? number : fallback;
+        }
+
+        const trainMaxDistance = positiveDistance(
+            window.CREATE_TRAIN_LABEL_MAX_DISTANCE,
+            4096
+        );
+        const vehicleMaxDistance = positiveDistance(
+            window.CREATE_VEHICLE_LABEL_MAX_DISTANCE,
+            4096
+        );
 
         const originalUpdateFromData = HtmlMarker.prototype.updateFromData;
         HtmlMarker.prototype.updateFromData = function (markerData) {
             if (markerData?.classes?.includes?.("create-train-name-marker")) {
                 markerData = {
                     ...markerData,
-                    maxDistance,
+                    maxDistance: trainMaxDistance,
+                };
+            } else if (markerData?.classes?.includes?.("create-vehicle-name-marker")) {
+                markerData = {
+                    ...markerData,
+                    maxDistance: vehicleMaxDistance,
                 };
             }
 
             return originalUpdateFromData.call(this, markerData);
         };
 
-        Object.defineProperty(HtmlMarker.prototype, "__createTrainDistanceLimitPatched", {
+        Object.defineProperty(HtmlMarker.prototype, "__createLabelDistanceLimitsPatched", {
             configurable: false,
             enumerable: false,
             writable: false,
             value: true,
         });
 
-        console.log(`[CreateTrainBootstrap] train-name max distance: ${maxDistance}`);
+        console.log(
+            `[CreateTrainBootstrap] label max distances: trains=${trainMaxDistance}, vehicles=${vehicleMaxDistance}`
+        );
     }
 
     async function start() {
@@ -129,16 +168,19 @@
 
             // Core renderer first, then optional UI/features that depend on its globals.
             await loadScript("train.js");
+            await loadScript("contraptions.js");
+            await loadScript("vehicles.js");
             installCoreMarkerGuard();
             await loadScript("train-settings.js", { optional: true });
 
-            // Train-name HtmlMarkers fade out with BlueMap's normal distance logic.
-            // The default is fully hidden at 4096 blocks and can be overridden by
-            // window.CREATE_TRAIN_LABEL_MAX_DISTANCE in create-train-config.js.
-            installTrainLabelDistanceLimit();
+            // Train/vehicle HtmlMarkers fade out with BlueMap's normal distance logic.
+            // Defaults are fully hidden at 4096 blocks and can be overridden in
+            // create-train-config.js.
+            installLabelDistanceLimits();
             await loadScript("train-labels.js", { optional: true });
+            await loadScript("vehicle-labels.js", { optional: true });
 
-            console.log("[CreateTrainBootstrap] all Create train scripts loaded");
+            console.log("[CreateTrainBootstrap] all Create overlay scripts loaded");
         } catch (error) {
             console.error("[CreateTrainBootstrap] startup failed", error);
         }

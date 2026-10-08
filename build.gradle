@@ -23,6 +23,7 @@ group = mod_group_id
 repositories {
     maven { url = "https://maven.createmod.net" } // Create, Ponder, Flywheel
     maven { url = "https://maven.ithundxr.dev/snapshots" } // Registrate
+    maven { url = "https://repo.bluecolored.de/releases" } // BlueMap
     mavenCentral()
 }
 
@@ -121,6 +122,13 @@ dependencies {
     compileOnly("dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}")
     runtimeOnly("dev.engine-room.flywheel:flywheel-neoforge-${minecraft_version}:${flywheel_version}")
     implementation("com.tterrag.registrate:Registrate:${registrate_version}")
+
+    // BlueMap is provided by the server at runtime. We only compile against
+    // its PRBM/model-rendering API so vehicle models can use the same textured
+    // geometry path as trains.
+    compileOnly("de.bluecolored:bluemap-core:5.7")
+    compileOnly("de.bluecolored:bluemap-common:5.7")
+    compileOnly("de.bluecolored:bluemap-api:2.7.4")
 
     jarJar(implementation("io.undertow:undertow-core")) {
         version {

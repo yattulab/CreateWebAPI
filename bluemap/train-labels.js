@@ -143,25 +143,37 @@
     }
 
     function currentWorldKey() {
-        const mapName = mapViewer.map?.data?.name;
-        if (!mapName) return "";
+        // Reuse the dimension inference from train.js. Custom BlueMap display
+        // names like "NNSR Craft" are not Minecraft dimension identifiers.
+        if (typeof window.CreateTrainDimension === "function") {
+            return window.CreateTrainDimension();
+        }
 
-        const match = /\((?<name>.*)\)/.exec(mapName);
-        return (match?.groups?.name ?? mapName).toLocaleLowerCase();
+        const name = String(mapViewer.map?.data?.name ?? "").toLocaleLowerCase();
+        if (name.includes("nether")) return "minecraft:the_nether";
+        if (/(^|[\\s(_: -])(?:the[_\\s-]+)?end($|[\\s): _-])/.test(name)) {
+            return "minecraft:the_end";
+        }
+        return "minecraft:overworld";
     }
 
     let networkData = null;
     let trainsData = [];
     let animationStates = new Map();
+    let networkFetchInFlight = false;
 
     function nodeMapForDimension(dimKey) {
         if (!networkData || !dimKey) return new Map();
 
-        const nodes = Array.from(networkData.nodes ?? []).filter(node =>
-            node.dimensionLocationData?.dimension
-                ?.toLocaleLowerCase()
-                .includes(dimKey)
-        );
+        const nodes = Array.from(networkData.nodes ?? []).filter(node => {
+            const dimension = node.dimensionLocationData?.dimension;
+            if (!dimension) return false;
+            if (typeof window.CreateTrainDimensionMatch === "function") {
+                return window.CreateTrainDimensionMatch(dimension);
+            }
+            const normalized = String(dimension).toLocaleLowerCase();
+            return normalized.includes(dimKey) || dimKey.includes(normalized);
+        });
         return new Map(nodes.map(node => [node.id, node]));
     }
 
@@ -336,13 +348,24 @@
     }
 
     async function fetchNetwork() {
+        if (networkFetchInFlight) return;
+        networkFetchInFlight = true;
         try {
-            const response = await fetch(`${host}/network`);
+            const response = await fetch(`${host}/network`, { cache: "no-store" });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            networkData = await response.json();
+            const received = await response.json();
+            if (!Array.isArray(received?.nodes)) {
+                throw new Error("Invalid railway network response");
+            }
+            networkData = received;
             updateTrainTargets();
+            console.info("[CreateTrainLabels] network loaded:",
+                networkData.nodes.length, "nodes,",
+                nodeMapForDimension(currentWorldKey()).size, "in", currentWorldKey());
         } catch (error) {
-            console.error("[CreateTrainLabels] failed to load railway network", error);
+            console.warn("[CreateTrainLabels] network fetch failed; will retry", error);
+        } finally {
+            networkFetchInFlight = false;
         }
     }
 
@@ -403,6 +426,24 @@
         lastWorld = world;
         updateTrainTargets();
     }, 500);
+
+    // A failed startup request previously made all train-name labels stay
+    // invisible until a manual refresh. Retry only while missing node data.
+    setInterval(() => {
+        if (!networkData || (trainsData.length > 0 &&
+                nodeMapForDimension(currentWorldKey()).size === 0)) {
+            fetchNetwork();
+        }
+    }, 10000);
+
+    window.CreateTrainLabelDiagnostics = () => ({
+        dimension: currentWorldKey(),
+        networkNodes: networkData?.nodes?.length ?? null,
+        dimensionNodes: nodeMapForDimension(currentWorldKey()).size,
+        trainCount: trainsData.length,
+        renderedLabels: labelMarkerSet?.markers?.size ?? 0,
+        labelSetVisible: labelMarkerSet?.visible ?? false,
+    });
 
     fetchNetwork();
     connectTrainStream();
