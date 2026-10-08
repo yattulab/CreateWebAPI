@@ -45,6 +45,7 @@ public class CreateTrainWebAPIMod {
         // 20 TPS / 4 ticks = 5 snapshots per second, matching the 200 ms SSE cadence.
         if (++contraptionSnapshotTicks >= 4) {
             contraptionSnapshotTicks = 0;
+            TrackInformation.updateTrainSnapshot();
             ContraptionInformation.update(event.getServer());
             SableVehicleInformation.update(event.getServer());
         }
