@@ -224,7 +224,7 @@ function currentWorldKey() {
     for (const identity of identities) {
         if (identity.includes("nether")) return "minecraft:the_nether";
         if (identity === "end" || identity === "the_end" ||
-                identity.includes("the_end") || identity.includes("the end")) {
+                /(^|[\\s(_: -])(?:the[_\\s-]+)?end($|[\\s): _-])/.test(identity)) {
             return "minecraft:the_end";
         }
     }
