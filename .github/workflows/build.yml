@@ -35,6 +35,7 @@ jobs:
             node --check "$script"
           done
           node scripts/test-bluemap-world-matching.mjs
+          node scripts/test-vehicle-prbm-optimizer.mjs
 
       - name: Build with Gradle
         run: ./gradlew build
