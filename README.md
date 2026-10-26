@@ -95,3 +95,34 @@ trainModelPath = "bluemap/train_models/"
 ```
 
 The existing `trainModelPath` remains only for PRBM train models. Contraption models are generated in memory from Create's live block data and are served through `/contraptionModels/<modelId>`.
+
+## Sable PRBM draw-call optimization (BlueMap 5.7)
+
+`bluemap/vehicles.js` renders Sable physics vehicles via `/vehicleModels/<modelId>.prbm`
+and BlueMap's textured `hiresMaterial` array. When a model is first shown:
+
+- Opaque groups with the same material index are merged by reordering the
+  geometry index buffer, preserving vertex data, UVs and triangle winding.
+- Transparent groups retain their original relative order for blending.
+- A local-space bounding sphere enables frustum culling for PRBM vehicles.
+- The optimized geometry is cached by `modelId`; 200 ms SSE updates remain.
+
+Only `bluemap/vehicles.js` must be replaced for this frontend-only change.
+Keep the existing Minecraft 1.0.4 JAR and all environment-specific web scripts.
+
+Inspect the reduction in the browser console:
+
+```js
+console.table(window.CreateVehicleOverlay.optimizationStats());
+```
+
+Both optimizations are enabled by default. To disable one for troubleshooting,
+add the following to the existing `create-train-config.js` and reload:
+
+```js
+window.CREATE_VEHICLE_PRBM_OPTIMIZATION = false;
+window.CREATE_VEHICLE_FRUSTUM_CULLING = false;
+```
+
+The exact reduction depends on the number of transparent materials in each
+vehicle. No PRBM files need to be regenerated.
