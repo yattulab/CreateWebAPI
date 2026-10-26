@@ -302,6 +302,148 @@
         return group;
     }
 
+    /**
+     * Regroup BlueMap PRBM triangles by material without changing the vertices,
+     * texture coordinates, normals, or triangle winding.
+     *
+     * BlueMap often writes one geometry group per block face, so a single ship
+     * can issue thousands of WebGL draw calls. Opaque triangles may be rendered
+     * in material order; keep transparent groups as separate, ordered ranges
+     * so the existing blending order is not destroyed.
+     *
+     * Supports both indexed and non-indexed BufferGeometry. A non-indexed
+     * PRBM receives an index buffer that references its original vertices.
+     * Malformed/partial groups are left untouched instead of losing faces.
+     */
+    function optimizePrbmGeometry(geometry, materials) {
+        const groups = geometry?.groups ?? [];
+        const result = {
+            before: groups.length,
+            after: groups.length,
+            opaqueMaterials: 0,
+            transparentGroups: 0,
+            optimized: false,
+            reason: "",
+        };
+
+        if (groups.length < 2) {
+            result.reason = "already compact";
+            return result;
+        }
+        if (!Array.isArray(materials) || materials.length === 0) {
+            result.reason = "BlueMap material gallery unavailable";
+            return result;
+        }
+
+        const position = geometry.getAttribute?.("position");
+        const originalIndex = geometry.getIndex?.() ?? geometry.index;
+        const source = originalIndex?.array ?? null;
+        const elementCount = source?.length ?? position?.count;
+
+        if (!position || !Number.isSafeInteger(elementCount) || elementCount <= 0) {
+            result.reason = "invalid PRBM geometry";
+            return result;
+        }
+        const drawRange = geometry.drawRange;
+        if (drawRange && (drawRange.start !== 0 ||
+                (Number.isFinite(drawRange.count) && drawRange.count < elementCount))) {
+            result.reason = "partially drawn PRBM geometry";
+            return result;
+        }
+
+        const opaque = new Map();
+        const transparent = [];
+        let expectedStart = 0;
+
+        for (const group of groups) {
+            const { start, count, materialIndex = 0 } = group;
+
+            if (start !== expectedStart || !Number.isSafeInteger(count) ||
+                    count <= 0 || count % 3 !== 0 ||
+                    !Number.isSafeInteger(materialIndex) ||
+                    materialIndex < 0 || !materials[materialIndex] ||
+                    start + count > elementCount) {
+                result.reason = "non-contiguous or invalid PRBM groups";
+                return result;
+            }
+            expectedStart += count;
+
+            const material = materials[materialIndex];
+            const isTransparent = material.transparent === true ||
+                material.depthWrite === false ||
+                (typeof material.opacity === "number" && material.opacity < 1) ||
+                (THREE.NormalBlending !== undefined &&
+                    material.blending !== undefined &&
+                    material.blending !== THREE.NormalBlending);
+
+            if (isTransparent) {
+                transparent.push({ materialIndex, slices: [group] });
+            } else {
+                if (!opaque.has(materialIndex)) opaque.set(materialIndex, []);
+                opaque.get(materialIndex).push(group);
+            }
+        }
+
+        if (expectedStart !== elementCount) {
+            result.reason = "PRBM groups do not cover the geometry";
+            return result;
+        }
+
+        const batches = [
+            ...[...opaque.entries()].map(([materialIndex, slices]) =>
+                ({ materialIndex, slices })),
+            ...transparent,
+        ];
+        result.opaqueMaterials = opaque.size;
+        result.transparentGroups = transparent.length;
+
+        if (batches.length >= groups.length) {
+            result.reason = "no safe group merges available";
+            return result;
+        }
+
+        // Use Uint32 only when an index may exceed the Uint16 range.
+        const IndexArray = position.count > 65535 ? Uint32Array : Uint16Array;
+        const reordered = new IndexArray(elementCount);
+        const newGroups = [];
+        let cursor = 0;
+
+        for (const batch of batches) {
+            const start = cursor;
+
+            for (const slice of batch.slices) {
+                if (source) {
+                    reordered.set(
+                        source.subarray(slice.start, slice.start + slice.count),
+                        cursor
+                    );
+                    cursor += slice.count;
+                } else {
+                    for (let i = 0; i < slice.count; i++) {
+                        reordered[cursor++] = slice.start + i;
+                    }
+                }
+            }
+
+            newGroups.push({
+                start,
+                count: cursor - start,
+                materialIndex: batch.materialIndex,
+            });
+        }
+
+        // Commit only after all validation/copying has succeeded.
+        geometry.setIndex(new THREE.BufferAttribute(reordered, 1));
+        geometry.clearGroups();
+        for (const group of newGroups) {
+            geometry.addGroup(group.start, group.count, group.materialIndex);
+        }
+
+        result.after = newGroups.length;
+        result.optimized = true;
+        return result;
+    }
+
     function buildPrbmModel(model) {
         const map = findLoadedBlueMap();
         let material = map?.hiresMaterial;
@@ -318,8 +460,47 @@
                 });
         }
 
+        // A modelId is shared by all instances of the same block layout.
+        // Optimize only once; live 200 ms Sable pose updates never touch it.
+        if (!model.optimization &&
+                window.CREATE_VEHICLE_PRBM_OPTIMIZATION !== false &&
+                Array.isArray(material)) {
+            try {
+                model.optimization = optimizePrbmGeometry(model.geometry, material);
+                const info = model.optimization;
+                console.info(
+                    "[CreateVehicles] PRBM groups: " + info.before + " → " + info.after +
+                    " (" + (info.before - info.after) + " saved;" +
+                    " " + info.transparentGroups + " transparent groups)" +
+                    (info.reason ? " [" + info.reason + "]" : "")
+                );
+            } catch (error) {
+                // Keep the original PRBM rather than losing the vehicle.
+                console.warn("[CreateVehicles] PRBM optimization skipped", error);
+            }
+        }
+
         const mesh = new THREE.Mesh(model.geometry, material);
-        mesh.frustumCulled = false;
+
+        // PRBM vertices (including Sable's pivot offset) are in local space.
+        // Three.js automatically transforms this sphere with the live world
+        // position, quaternion and scale when testing camera visibility.
+        try {
+            if (!model.geometry.boundingSphere) {
+                model.geometry.computeBoundingSphere();
+            }
+            const sphere = model.geometry.boundingSphere;
+            mesh.frustumCulled = window.CREATE_VEHICLE_FRUSTUM_CULLING !== false &&
+                Boolean(sphere && Number.isFinite(sphere.radius) &&
+                    sphere.radius >= 0 &&
+                    Number.isFinite(sphere.center.x) &&
+                    Number.isFinite(sphere.center.y) &&
+                    Number.isFinite(sphere.center.z));
+        } catch (error) {
+            mesh.frustumCulled = false;
+            console.warn("[CreateVehicles] unable to calculate PRBM bounds", error);
+        }
+
         mesh.userData.createVehiclePrbm = true;
         return mesh;
     }
@@ -607,11 +788,27 @@
         }
     }, 500);
 
+    function optimizationStats() {
+        return [...modelCache.entries()]
+            .filter(([, model]) => model?.kind === "prbm")
+            .map(([modelId, model]) => ({
+                modelId,
+                groupsBefore: model.optimization?.before ?? model.geometry.groups.length,
+                groupsAfter: model.geometry.groups.length,
+                savedDrawCalls: model.optimization?.optimized
+                    ? model.optimization.before - model.optimization.after : 0,
+                transparentGroups: model.optimization?.transparentGroups ?? null,
+                optimized: model.optimization?.optimized ?? false,
+                reason: model.optimization?.reason ?? "not optimized yet",
+            }));
+    }
+
     window.CreateVehicleOverlay = {
         scene,
         toggle,
         animate,
         syncRenderables,
+        optimizationStats,
     };
 
     connect();
