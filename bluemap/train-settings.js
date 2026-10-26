@@ -15,6 +15,8 @@
     const STORAGE_KEYS = {
         linesThroughTerrain: "create-train-lines-through-terrain",
         trainsThroughTerrain: "create-train-trains-through-terrain",
+        contraptionsThroughTerrain: "create-contraptions-through-terrain",
+        vehiclesThroughTerrain: "create-vehicles-through-terrain",
     };
 
     function loadBoolean(key, fallback) {
@@ -42,6 +44,14 @@
             STORAGE_KEYS.trainsThroughTerrain,
             window.CREATE_TRAIN_TRAINS_THROUGH_TERRAIN ?? false
         ),
+        contraptionsThroughTerrain: loadBoolean(
+            STORAGE_KEYS.contraptionsThroughTerrain,
+            window.CREATE_CONTRAPTIONS_THROUGH_TERRAIN ?? false
+        ),
+        vehiclesThroughTerrain: loadBoolean(
+            STORAGE_KEYS.vehiclesThroughTerrain,
+            window.CREATE_VEHICLES_THROUGH_TERRAIN ?? false
+        ),
     };
 
     const BUTTON_ID = "create-train-settings-button";
@@ -50,8 +60,12 @@
     function syncInputs() {
         const linesInput = document.getElementById("create-train-lines-through-terrain");
         const trainsInput = document.getElementById("create-train-trains-through-terrain");
+        const contraptionsInput = document.getElementById("create-contraptions-through-terrain");
+        const vehiclesInput = document.getElementById("create-vehicles-through-terrain");
         if (linesInput) linesInput.checked = state.linesThroughTerrain;
         if (trainsInput) trainsInput.checked = state.trainsThroughTerrain;
+        if (contraptionsInput) contraptionsInput.checked = state.contraptionsThroughTerrain;
+        if (vehiclesInput) vehiclesInput.checked = state.vehiclesThroughTerrain;
     }
 
     function setLinesThroughTerrain(value) {
@@ -63,6 +77,18 @@
     function setTrainsThroughTerrain(value) {
         state.trainsThroughTerrain = !!value;
         saveBoolean(STORAGE_KEYS.trainsThroughTerrain, state.trainsThroughTerrain);
+        syncInputs();
+    }
+
+    function setContraptionsThroughTerrain(value) {
+        state.contraptionsThroughTerrain = !!value;
+        saveBoolean(STORAGE_KEYS.contraptionsThroughTerrain, state.contraptionsThroughTerrain);
+        syncInputs();
+    }
+
+    function setVehiclesThroughTerrain(value) {
+        state.vehiclesThroughTerrain = !!value;
+        saveBoolean(STORAGE_KEYS.vehiclesThroughTerrain, state.vehiclesThroughTerrain);
         syncInputs();
     }
 
@@ -78,6 +104,18 @@
         },
         set trainsThroughTerrain(value) {
             setTrainsThroughTerrain(value);
+        },
+        get contraptionsThroughTerrain() {
+            return state.contraptionsThroughTerrain;
+        },
+        set contraptionsThroughTerrain(value) {
+            setContraptionsThroughTerrain(value);
+        },
+        get vehiclesThroughTerrain() {
+            return state.vehiclesThroughTerrain;
+        },
+        set vehiclesThroughTerrain(value) {
+            setVehiclesThroughTerrain(value);
         },
     };
 
@@ -220,6 +258,20 @@
                     <span class="create-train-switch-track"></span>
                 </span>
             </label>
+            <label class="create-train-settings-row">
+                <span>カラクリを地形越しに表示</span>
+                <span class="create-train-switch">
+                    <input id="create-contraptions-through-terrain" type="checkbox">
+                    <span class="create-train-switch-track"></span>
+                </span>
+            </label>
+            <label class="create-train-settings-row">
+                <span>乗り物を地形越しに表示</span>
+                <span class="create-train-switch">
+                    <input id="create-vehicles-through-terrain" type="checkbox">
+                    <span class="create-train-switch-track"></span>
+                </span>
+            </label>
             <div class="create-train-settings-note">
                 表示・非表示はBlueMapの「マーカー」から切り替えます．
             </div>
@@ -235,6 +287,14 @@
 
         panel.querySelector("#create-train-trains-through-terrain")?.addEventListener("change", event => {
             setTrainsThroughTerrain(event.target.checked);
+        });
+
+        panel.querySelector("#create-contraptions-through-terrain")?.addEventListener("change", event => {
+            setContraptionsThroughTerrain(event.target.checked);
+        });
+
+        panel.querySelector("#create-vehicles-through-terrain")?.addEventListener("change", event => {
+            setVehiclesThroughTerrain(event.target.checked);
         });
 
         document.body.appendChild(panel);
@@ -286,9 +346,16 @@
         renderOverlayLoop = function createTrainRenderOverlayLoopWithSettings() {
             animateTrains();
 
+            const contraptions = window.CreateContraptionOverlay;
+            const vehicles = window.CreateVehicleOverlay;
+            contraptions?.animate?.();
+            vehicles?.animate?.();
+
             const camera = mapViewer.camera;
             const showLines = routeToggle.visible;
             const showTrains = trainToggle.visible;
+            const showContraptions = contraptions?.toggle?.visible ?? false;
+            const showVehicles = vehicles?.toggle?.visible ?? false;
 
             // Draw depth-tested overlays first so terrain can occlude them.
             if (showLines && !state.linesThroughTerrain) {
@@ -297,11 +364,19 @@
             if (showTrains && !state.trainsThroughTerrain) {
                 renderer.render(trainsScene, camera);
             }
+            if (showContraptions && !state.contraptionsThroughTerrain) {
+                renderer.render(contraptions.scene, camera);
+            }
+            if (showVehicles && !state.vehiclesThroughTerrain) {
+                renderer.render(vehicles.scene, camera);
+            }
 
             // Draw through-terrain overlays only after clearing the depth buffer.
             if (
                 (showLines && state.linesThroughTerrain) ||
-                (showTrains && state.trainsThroughTerrain)
+                (showTrains && state.trainsThroughTerrain) ||
+                (showContraptions && state.contraptionsThroughTerrain) ||
+                (showVehicles && state.vehiclesThroughTerrain)
             ) {
                 renderer.clearDepth();
                 if (showLines && state.linesThroughTerrain) {
@@ -309,6 +384,12 @@
                 }
                 if (showTrains && state.trainsThroughTerrain) {
                     renderer.render(trainsScene, camera);
+                }
+                if (showContraptions && state.contraptionsThroughTerrain) {
+                    renderer.render(contraptions.scene, camera);
+                }
+                if (showVehicles && state.vehiclesThroughTerrain) {
+                    renderer.render(vehicles.scene, camera);
                 }
             }
 

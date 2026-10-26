@@ -19,14 +19,77 @@ import java.util.*;
 public class TrackInformation {
     public static GlobalRailwayManager railway = Create.RAILWAYS;
 
+    // HTTP and SSE threads must not traverse live Create railway objects.
+    // A snapshot is captured on the Minecraft server thread every four ticks.
+    private static volatile List<TrainData> trainSnapshot = List.of();
+    private static long lastTrainErrorLogMillis = 0L;
+    private static int lastTrainCount = -1;
+
     public static List<TrainData> GetTrainData() {
-        Map<UUID, Train> trains = railway.trains;
-        List<TrainData> data = new ArrayList<>();
-        for (UUID uuid : trains.keySet()) {
-            Train train = trains.get(uuid);
-            data.add(new TrainData(train));
+        return trainSnapshot;
+    }
+
+    public static void updateTrainSnapshot() {
+        final long now = System.currentTimeMillis();
+        final List<TrainData> next = new ArrayList<>();
+
+        try {
+            Map<UUID, Train> trains = railway.trains;
+            if (trains == null) {
+                return;
+            }
+
+            // Preserve the last usable snapshot of an individual train if a
+            // mod transiently leaves it in an inconsistent state.
+            Map<UUID, TrainData> previousById = new HashMap<>();
+            for (TrainData data : trainSnapshot) {
+                previousById.put(data.id, data);
+            }
+
+            for (Map.Entry<UUID, Train> entry : trains.entrySet()) {
+                UUID trainId = entry.getKey();
+                Train train = entry.getValue();
+
+                if (train == null) {
+                    continue;
+                }
+
+                try {
+                    next.add(new TrainData(train));
+                } catch (RuntimeException | LinkageError error) {
+                    TrainData previous = previousById.get(trainId);
+                    if (previous != null) {
+                        next.add(previous);
+                    }
+                    if (now - lastTrainErrorLogMillis >= 30_000) {
+                        lastTrainErrorLogMillis = now;
+                        CreateTrainWebAPIMod.LOGGER.warn(
+                                "Failed to snapshot Create train {}; retaining last valid data if available",
+                                trainId,
+                                error
+                        );
+                    }
+                }
+            }
+
+            trainSnapshot = List.copyOf(next);
+
+            if (lastTrainCount != next.size()) {
+                lastTrainCount = next.size();
+                CreateTrainWebAPIMod.LOGGER.info(
+                        "Create train snapshot contains {} train(s)",
+                        lastTrainCount
+                );
+            }
+        } catch (RuntimeException | LinkageError error) {
+            if (now - lastTrainErrorLogMillis >= 30_000) {
+                lastTrainErrorLogMillis = now;
+                CreateTrainWebAPIMod.LOGGER.error(
+                        "Could not refresh Create train snapshot; keeping the previous data",
+                        error
+                );
+            }
         }
-        return data;
     }
 
     public static NetworkData GetNetworkData() {

@@ -74,6 +74,10 @@ function patchBlueMap57MarkerManager() {
             "bm-popup-set",
             "create-rail-network",
             "create-trains",
+            "create-contraptions",
+            "create-vehicles",
+            "create-train-labels",
+            "create-vehicle-labels",
         ]);
         return true;
     };
@@ -84,6 +88,10 @@ function patchBlueMap57MarkerManager() {
             "bm-popup-set",
             "create-rail-network",
             "create-trains",
+            "create-contraptions",
+            "create-vehicles",
+            "create-train-labels",
+            "create-vehicle-labels",
         ]);
     };
 
@@ -166,22 +174,80 @@ let trainsData = [];
 let lastTrainState = new Map();
 let trainModelCache = new Map();
 let trainModelRequests = new Map();
+const trainModelRetryAt = new Map();
 const edgeToNetwork = new Map();
+let networkFetchInFlight = false;
+
+// BlueMap custom map names are not Minecraft dimension ids.
+// Use the same dimension inference/overrides as the Sable vehicle overlay.
+function currentMapIdentities() {
+    const map = mapViewer.map;
+    const data = map?.data ?? {};
+    const values = [
+        data.dimension, data.id, data.key, data.name,
+        map?.id, map?.key,
+    ].filter(value => typeof value === "string" && value.length > 0)
+        .map(value => value.toLocaleLowerCase().trim());
+    for (const value of [...values]) {
+        const match = /\(([^)]+)\)/.exec(value);
+        if (match) values.push(match[1].toLocaleLowerCase().trim());
+    }
+    return [...new Set(values)];
+}
+
+function normalizeMinecraftDimension(dimension) {
+    const value = String(dimension ?? "").toLocaleLowerCase().trim();
+    if (value.includes("minecraft:the_nether") || value === "nether" || value === "the_nether") {
+        return "minecraft:the_nether";
+    }
+    if (value.includes("minecraft:the_end") || value === "end" || value === "the_end") {
+        return "minecraft:the_end";
+    }
+    if (value.includes("minecraft:overworld") || value === "world" || value === "overworld") {
+        return "minecraft:overworld";
+    }
+    return value;
+}
 
 function currentWorldKey() {
-    const mapName = mapViewer.map?.data?.name;
-    if (!mapName) return "";
-    const match = /\((?<name>.*)\)/.exec(mapName);
-    return (match?.groups?.name ?? mapName).toLocaleLowerCase();
+    const identities = currentMapIdentities();
+    const overrides = window.CREATE_MAP_DIMENSION_OVERRIDES;
+    if (overrides && typeof overrides === "object") {
+        for (const [key, dimension] of Object.entries(overrides)) {
+            if (identities.includes(key.toLocaleLowerCase().trim()) &&
+                    typeof dimension === "string" && dimension.length > 0) {
+                return normalizeMinecraftDimension(dimension);
+            }
+        }
+    }
+
+    for (const identity of identities) {
+        if (identity.includes("nether")) return "minecraft:the_nether";
+        if (identity === "end" || identity === "the_end" ||
+                /(^|[\\s(_: -])(?:the[_\\s-]+)?end($|[\\s): _-])/.test(identity)) {
+            return "minecraft:the_end";
+        }
+    }
+    // A custom primary map title (e.g. "NNSR Craft") is the Overworld.
+    return "minecraft:overworld";
+}
+
+function dimensionMatchesCurrentMap(dimension) {
+    return normalizeMinecraftDimension(dimension) === currentWorldKey();
 }
 
 function nodeMapForDimension(dimKey) {
     if (!networkData || !dimKey) return new Map();
+    const normalized = normalizeMinecraftDimension(dimKey);
     const nodes = Array.from(networkData.nodes ?? []).filter(node =>
-        node.dimensionLocationData?.dimension?.toLocaleLowerCase().includes(dimKey)
+        normalizeMinecraftDimension(node.dimensionLocationData?.dimension) === normalized
     );
     return new Map(nodes.map(node => [node.id, node]));
 }
+
+// Allow the train labels overlay to share exactly the same map dimension.
+window.CreateTrainDimension = currentWorldKey;
+window.CreateTrainDimensionMatch = dimensionMatchesCurrentMap;
 
 function detectNetworks() {
     edgeToNetwork.clear();
@@ -379,17 +445,31 @@ function renderPortals() {
 }
 
 async function fetchAndRenderNetwork() {
+    if (networkFetchInFlight) return;
+    networkFetchInFlight = true;
     try {
-        const response = await fetch(`${host}/network`);
+        const response = await fetch(`${host}/network`, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        networkData = await response.json();
+        const received = await response.json();
+        if (!Array.isArray(received?.nodes)) throw new Error("Invalid railway network response");
+        networkData = received;
         detectNetworks();
         renderTracks();
         renderStations();
         renderPortals();
         updateTrainStates();
+        console.info(
+            "[CreateTrain] network loaded:",
+            networkData.nodes.length,
+            "nodes,",
+            nodeMapForDimension(currentWorldKey()).size,
+            "in",
+            currentWorldKey()
+        );
     } catch (err) {
-        console.error("[CreateTrain] failed to load rail network", err);
+        console.warn("[CreateTrain] network fetch failed; will retry", err);
+    } finally {
+        networkFetchInFlight = false;
     }
 }
 
@@ -490,7 +570,11 @@ function findLoadedBlueMap() {
 }
 
 async function loadTrainModel(url, direction) {
-    if (trainModelCache.has(url)) return trainModelCache.get(url);
+    if (trainModelCache.has(url)) {
+        const existing = trainModelCache.get(url);
+        if (existing || Date.now() < (trainModelRetryAt.get(url) ?? 0)) return existing;
+        trainModelCache.delete(url);
+    }
     if (trainModelRequests.has(url)) return trainModelRequests.get(url);
 
     const task = (async () => {
@@ -515,10 +599,12 @@ async function loadTrainModel(url, direction) {
 
             const model = { geometry, material };
             trainModelCache.set(url, model);
+            trainModelRetryAt.delete(url);
             return model;
         } catch (err) {
-            console.debug(`[CreateTrain] train model unavailable: ${url}`, err);
+            console.debug(`[CreateTrain] train model unavailable: ${url}; retrying later`, err);
             trainModelCache.set(url, null);
+            trainModelRetryAt.set(url, Date.now() + 10000);
             return null;
         } finally {
             trainModelRequests.delete(url);
@@ -533,7 +619,10 @@ function ensureTrainModels() {
     trainsData.forEach(train => {
         (train.cars ?? []).forEach((car, carIndex) => {
             const url = modelUrl(train.id, carIndex);
-            if (!trainModelCache.has(url) && !trainModelRequests.has(url)) {
+            const retryExpired = trainModelCache.has(url) &&
+                trainModelCache.get(url) === null &&
+                Date.now() >= (trainModelRetryAt.get(url) ?? 0);
+            if ((!trainModelCache.has(url) || retryExpired) && !trainModelRequests.has(url)) {
                 loadTrainModel(url, car.assemblyDirection ?? "SOUTH").then(() => {
                     renderTrainMeshes();
                 });
@@ -543,7 +632,6 @@ function ensureTrainModels() {
 }
 
 function renderTrainMeshes() {
-    const dimension = currentWorldKey();
     const wanted = new Set();
 
     trainsData.forEach(train => {
@@ -552,7 +640,7 @@ function renderTrainMeshes() {
 
         (train.cars ?? []).forEach((car, carIndex) => {
             const carState = state.cars[carIndex];
-            if (!carState?.dimension?.toLocaleLowerCase().includes(dimension)) return;
+            if (!carState?.dimension || !dimensionMatchesCurrentMap(carState.dimension)) return;
 
             const key = `${train.id}:${carIndex}`;
             wanted.add(key);
@@ -605,7 +693,6 @@ function animateTrains() {
     if (!trainToggle.visible) return;
 
     const now = performance.now();
-    const dimension = currentWorldKey();
 
     trainsData.forEach(train => {
         const state = lastTrainState.get(train.id);
@@ -613,7 +700,7 @@ function animateTrains() {
 
         (train.cars ?? []).forEach((car, carIndex) => {
             const carState = state.cars[carIndex];
-            if (!carState?.dimension?.toLocaleLowerCase().includes(dimension)) return;
+            if (!carState?.dimension || !dimensionMatchesCurrentMap(carState.dimension)) return;
 
             const mesh = objects.trains.get(`${train.id}:${carIndex}`);
             if (!mesh) return;
@@ -670,22 +757,47 @@ function rotateGeometryToDirection(geometry, assemblyDirection, targetDirection 
 function renderOverlayLoop() {
     animateTrains();
 
+    const contraptions = window.CreateContraptionOverlay;
+    const vehicles = window.CreateVehicleOverlay;
+    contraptions?.animate?.();
+    vehicles?.animate?.();
+
     const camera = mapViewer.camera;
     const showLines = routeToggle.visible;
     const showTrains = trainToggle.visible;
+    const showContraptions = contraptions?.toggle?.visible ?? false;
+    const showVehicles = vehicles?.toggle?.visible ?? false;
+    const contraptionsThroughTerrain =
+        window.CREATE_CONTRAPTIONS_THROUGH_TERRAIN ?? false;
+    const vehiclesThroughTerrain =
+        window.CREATE_VEHICLES_THROUGH_TERRAIN ?? false;
 
     // Render depth-tested elements first.
     if (showLines && !linesVisibleThroughTerrain) renderer.render(linesScene, camera);
     if (showTrains && !trainsVisibleThroughTerrain) renderer.render(trainsScene, camera);
+    if (showContraptions && !contraptionsThroughTerrain) {
+        renderer.render(contraptions.scene, camera);
+    }
+    if (showVehicles && !vehiclesThroughTerrain) {
+        renderer.render(vehicles.scene, camera);
+    }
 
     // Render through-terrain elements after clearing the depth buffer.
     if (
         (showLines && linesVisibleThroughTerrain) ||
-        (showTrains && trainsVisibleThroughTerrain)
+        (showTrains && trainsVisibleThroughTerrain) ||
+        (showContraptions && contraptionsThroughTerrain) ||
+        (showVehicles && vehiclesThroughTerrain)
     ) {
         renderer.clearDepth();
         if (showLines && linesVisibleThroughTerrain) renderer.render(linesScene, camera);
         if (showTrains && trainsVisibleThroughTerrain) renderer.render(trainsScene, camera);
+        if (showContraptions && contraptionsThroughTerrain) {
+            renderer.render(contraptions.scene, camera);
+        }
+        if (showVehicles && vehiclesThroughTerrain) {
+            renderer.render(vehicles.scene, camera);
+        }
     }
 
     requestAnimationFrame(renderOverlayLoop);
@@ -708,6 +820,31 @@ setInterval(() => {
     fetchAndRenderNetwork();
     updateTrainStates();
 }, 500);
+
+// Recover if the first /network request happened before the server was ready.
+setInterval(() => {
+    if (!networkData || (trainsData.length > 0 &&
+            nodeMapForDimension(currentWorldKey()).size === 0)) {
+        fetchAndRenderNetwork();
+    }
+    ensureTrainModels();
+}, 10000);
+
+window.CreateTrainDiagnostics = () => ({
+    mapName: mapViewer.map?.data?.name ?? null,
+    mapIdentities: currentMapIdentities(),
+    dimension: currentWorldKey(),
+    networkNodes: networkData?.nodes?.length ?? null,
+    dimensionNodes: nodeMapForDimension(currentWorldKey()).size,
+    trainCount: trainsData.length,
+    trainIds: trainsData.map(train => train.id),
+    positionedCarriages: [...lastTrainState.values()].reduce(
+        (count, state) => count + state.cars.filter(Boolean).length, 0
+    ),
+    renderedCarriages: objects.trains.size,
+    labelsSetPresent: mapViewer.markers.markerSets?.has("create-train-labels") ?? false,
+    trainSetVisible: trainToggle.visible,
+});
 
 async function waitForMap() {
     while (!mapViewer.map?.data?.name) {
